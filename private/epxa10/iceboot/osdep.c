@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "iceboot/sfi.h"
 #include "booter/epxa.h"
@@ -251,6 +252,52 @@ int fpga_config(int *p, int nbytes) {
   }
 
   return 0;
+}
+
+/* re-program flasher board cpld...
+ *
+ * returns: 0 ok, non-zero error...
+ */
+int fb_cpld_config(int *p, int nbytes) {
+
+    int err;
+
+    /* Check data pointer */
+    if (p == NULL) {
+        printf("Error: file pointer argument is null!\n");
+        return 1;
+    }
+
+    /* Check xsvf file sanity */
+    /* Should start with XREPEAT, XENDDIR */
+    if (p[0] != 0x00130007) {
+        printf("Error: file doesn't appear to be a valid XSVF file.\n");
+        return 1;
+    }
+
+    /* Turn on flasherboard */
+    hal_FB_enable();
+    
+    /* Enable JTAG in PLD and FPGA */
+    hal_FPGA_TEST_FB_JTAG_enable();
+    halEnableFlasherJTAG();
+    
+    /* Execute xsvf player */
+    err = hal_FB_xsvfExecute(p, nbytes);
+    
+    if (err == 0)
+        printf("XSVF executed successfully!\n");
+    else               
+        printf("XSVF execution failed with error code %d.\n", err);
+    
+    /* Disable JTAG in PLD and FPGA  */
+    hal_FPGA_TEST_FB_JTAG_disable();
+    halDisableFlasherJTAG();
+    
+    /* Turn off flasherboard */
+    hal_FB_disable();
+    
+    return err;
 }
 
 /* wait input data

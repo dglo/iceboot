@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.98 $
- * $Author: arthur $
- * $Date: 2004-01-15 02:12:45 $
+ * $Revision: 1.98.2.1 $
+ * $Author: jkelley $
+ * $Date: 2004-05-13 18:55:13 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1289,6 +1289,14 @@ static int do_fpga_config(int addr, int nbytes) {
    return fpga_config((int *) addr, nbytes);
 }
 
+/* re-program flasher board cpld...
+ *
+ * returns: 0 ok, non-zero error...
+ */
+static int do_fb_cpld_config(int addr, int nbytes) {
+   return fb_cpld_config((int *) addr, nbytes);
+}
+
 static const char *sdup(const char *p) {
   int v = pop();
   push(v); push(v);
@@ -2023,6 +2031,7 @@ int main(int argc, char *argv[]) {
     { "swap", swap },
     { "fpga", do_fpga_config },
     { "interpret", interpret },
+    { "fb-cpld", do_fb_cpld_config },
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
 
