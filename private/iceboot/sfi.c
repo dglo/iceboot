@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.85 $
+ * $Revision: 1.90 $
  * $Author: arthur $
- * $Date: 2003-10-27 18:13:32 $
+ * $Date: 2003-11-06 22:17:08 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -134,7 +134,8 @@ static int stacklen = 1024;
 
 typedef enum {
    EXC_STACK_UNDERFLOW = 1,
-   EXC_STACK_OVERFLOW = 2
+   EXC_STACK_OVERFLOW = 2,
+   EXC_LINE_TOO_LONG = 3
 } ExceptionCodes;
 
 enum { ACQ_MODE_CPU = 1, ACQ_MODE_DISC = 2, ACQ_MODE_PP = 3 };
@@ -655,6 +656,7 @@ static int newLine(const char *line) {
     }
     else {
       Bucket *bp = lookupBucket(word);
+
       if (bp==NULL) {
 	printf("unknown word '%s'\r\n", word);
       }
@@ -1409,22 +1411,27 @@ static const char *hvid(const char *p) {
 static void prtCurrents(int rawCurrents) {
    float currents[5];
    /* volts per count */
-   const float vpc = 2.5/4095.0;
+   const float vpc = 2.048/1023.0;
    /* voltages */
    const float volts[] = { 5, 3.3, 2.5, 1.8, -5 };
    /*                     5V  3.3V 2.5V 1.8V -5V */
-   const float gain[] = { 100, 100, 100, 100, 100 };
+   const float gain[] = { 100, 10, 10, 100, 100 };
    const float reff[] = { 1,   0.98, 0.80, 0.96, 1 };
    const float ueff[] = { 1,     1,    1, 1,   1 };
    const float *eff = (rawCurrents) ? ueff : reff;
+
+   /*                     5V  3.3V 2.5V 1.8V -5V */
+   /* 1.8V and 2.5V have been swapped            */
+   const int   order[] = { 0, 1,   3,   2,    4 };
    int ii;
    
    /* format the currents... */
    for (ii=0; ii<5; ii++) {
-      currents[ii] = 
-	 eff[ii]*(5/volts[ii])*((readADC(3+ii) * vpc)/gain[ii])*10;
+      currents[order[ii]] = 
+	 eff[ii]*
+	 (5/volts[order[ii]])*((readADC(3+ii) * vpc)/gain[ii])*10;
    }
-	  
+
    /* write the string... */
    printf("  5V %.3fA, 3.3V %.3fA, "
 	  "2.5V %.3fA, 1.8V %.3fA, -5V %.3fA, %.1f (C)",
@@ -1666,8 +1673,8 @@ static const char *doInstall(const char *p) {
 static const char *pldVersions(const char *p) {
    /* print out the versioning info...
     */
-   printf("version      %d [%d]\r\n", halGetVersion(), halGetHWVersion());
-   printf("build number %d [%d]\r\n", halGetBuild(), halGetHWBuild());
+   printf("version      %d [%d]\r\n", halGetHWVersion(), halGetVersion());
+   printf("build number %d [%d]\r\n", halGetHWBuild(), halGetBuild());
    printf("matches?     %s\r\n", 
 	  halGetVersion()==halGetHWVersion() ? "yes" : "no");
    return p;
@@ -1721,6 +1728,23 @@ static const char *fpgaVersions(const char *p) {
 	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(SUPERNOVA));
 
    return p;
+}
+
+/* we do our own buffering for stdout -- up to 128 chars...
+ */
+static int  soBufLen = 0;
+static char soBuf[256];
+
+static void soPutm(const char *s, const int len) {
+   if (soBufLen+len>=sizeof(soBuf)-1) longjmp(jenv, EXC_LINE_TOO_LONG);
+   memcpy(soBuf + soBufLen, s, len);
+   soBufLen += len;
+}
+static void soPuts(const char *s) { soPutm(s, strlen(s)); }
+static void soPutc(char c) { soPutm(&c, 1); }
+static void soFlush(void) {
+   if (soBufLen>0) write(1, soBuf, soBufLen);
+   soBufLen = 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -1882,7 +1906,7 @@ int main(int argc, char *argv[]) {
   };
   const int nInitConstants = sizeof(initConstants)/sizeof(initConstants[0]);
 
-  int li = 0, ei = 0, done = 0, i;
+  int li = 0, ei = 0, i;
   extern void initMemTests(void);
   char *lines[32];
   int hl = 0, bl = -1;
@@ -1940,9 +1964,13 @@ int main(int argc, char *argv[]) {
      else if (err==EXC_STACK_OVERFLOW) {
 	printf("Error: stack overflow\r\n");
      }
+     else if (err==EXC_LINE_TOO_LONG) {
+	printf("Error: line too long\r\n");
+     }
      else {
 	printf("Error: unknown!\r\n");
      }
+     fflush(stdout);
 
      /* reset parsed line... */
      escaped = 0;
@@ -1950,13 +1978,8 @@ int main(int argc, char *argv[]) {
      li = 0;
   }
 
-  write(1, "\r\n> ", 4);
-  while (!done) {
-    if (ei==linesz) {
-      printf("!!!! line too long!!!\r\n");
-      break;
-    }
-
+  soPuts("\r\n> ");
+  while (1) {
     /* check for input, if there is none some
      * amount of time (500ms?) then update the currents
      * on the top bar...
@@ -1981,15 +2004,15 @@ int main(int argc, char *argv[]) {
 	  if (!isInputData()) prtCurrents(rawCurrents);
 	  
 	  /* set normal video, reset the current cursor location */
-	  printf("%c[m%c8", 27, 27); fflush(stdout);
+	  printf("%c[m%c8", 27, 27); 
+	  fflush(stdout);
        }
     }
-    
-    while (1) {
-       const int buflen = 128;
+
+    /* always flush before reading... */
+    soFlush();
+    {  const int buflen = 4096;
        char buf[buflen];
-       char wbuf[buflen*2]; /* '\r' -> '\r\n' conversion... */
-       int nwbuf = 0;
        int nr = read(0, buf, sizeof(buf));
        int idx;
 
@@ -2004,6 +2027,9 @@ int main(int argc, char *argv[]) {
 #if 0
 	  printf("\r\n[%d] 0x%02x\r\n", escaped, c);
 #endif
+	  
+	  /* FIXME: why do we get a '0' on epxa4??? */
+	  if (c == 0) continue;
     
 	  if (escaped) {
 	     char mv[8];
@@ -2027,7 +2053,7 @@ int main(int argc, char *argv[]) {
 		/* right... */
 		if (li<ei) {
 		   sprintf(mv, "%c[C", 27);
-		   write(1, mv, strlen(mv));
+		   soPuts(mv);
 		   li++;
 		}
 	     }
@@ -2035,7 +2061,7 @@ int main(int argc, char *argv[]) {
 		/* left... */
 		if (li>0) {
 		   sprintf(mv, "%c[D", 27);
-		   write(1, mv, strlen(mv));
+		   soPuts(mv);
 		   li--;
 		}
 	     }
@@ -2056,14 +2082,14 @@ int main(int argc, char *argv[]) {
 		 */
 		sprintf(cmd, "%c[D", 27);
 		while (li>0) {
-		   write(1, cmd, strlen(cmd));
+		   soPuts(cmd);
 		   li--;
 		}
 		
 		/* clear to end of line
 		 */
 		sprintf(cmd, "%c[K", 27);
-		write(1, cmd, strlen(cmd));
+		soPuts(cmd);
 		
 		/* add the line...
 		 */
@@ -2073,7 +2099,7 @@ int main(int argc, char *argv[]) {
 		
 		/* write the line...
 		 */
-		write(1, line, strlen(line));
+		soPuts(line);
 	     }
 	     
 	     escaped = 0;
@@ -2096,7 +2122,7 @@ int main(int argc, char *argv[]) {
 		if (li<ei) {
 		   if (!snw) snw = !isspace(line[li]);
 		   sprintf(mv, "%c[C", 27);
-		   write(1, mv, strlen(mv));
+		   soPuts(mv);
 		   li++;
 		   
 		   if (snw && li<ei && isspace(line[li])) break;
@@ -2115,7 +2141,7 @@ int main(int argc, char *argv[]) {
 	     while (1) {
 		if (li>0) {
 		   sprintf(mv, "%c[D", 27);
-		   write(1, mv, strlen(mv));
+		   soPuts(mv);
 		   li--;
 		   
 		   if (!snw) snw = !isspace(line[li]);
@@ -2128,18 +2154,18 @@ int main(int argc, char *argv[]) {
 	  else if (c=='\b' || c==0x7f) {
 	     if (li>0) {
 		char cmd[8];
+
 		sprintf(cmd, "%c%c[K", '\b', 27);
-		write(1, cmd, strlen(cmd));
+		soPuts(cmd);
 		
 		if (li<ei) {
 		   /* we need to write the rest...
 		    */
 		   sprintf(cmd, "%c7", 27);
-		   write(1, cmd, 2);
-		   write(1, line+li, (ei-li));
+		   soPuts(cmd);
+		   soPutm(line+li, (ei-li));
 		   sprintf(cmd, "%c8", 27);
-		   write(1, cmd, 2);
-		   
+		   soPuts(cmd);
 		   memmove(line+li-1, line+li, ei-li);
 		}
 		li--;
@@ -2150,9 +2176,8 @@ int main(int argc, char *argv[]) {
 	     /* we need to flush on '\r' so things
 	      * come out in the right order...
 	      */
-	     memcpy(wbuf + nwbuf, "\r\n", 2); nwbuf+=2;
-	     write(1, wbuf, nwbuf);
-	     nwbuf = 0;
+	     soPuts("\r\n");
+	     soFlush();
 
 	     line[ei] = 0;
 
@@ -2166,14 +2191,12 @@ int main(int argc, char *argv[]) {
 		
 		if (newLine(line)) {
 		   printf("!!! error new line\r\n");
-		   done = 1;
-		   break;
 		}
 	     }
 	     
 	     bl = -1;
 	     li = ei = 0;
-	     memcpy(wbuf + nwbuf, "> ", 2); nwbuf+=2;
+	     soPuts("> ");
 	  }
 	  else {
 	     /* make space for character...
@@ -2184,15 +2207,7 @@ int main(int argc, char *argv[]) {
 	      */
 	     line[li] = c;
 	     
-	     /* echo character if we're in the middle
-	      * of a line -- otherwise, we can delay it...
-	      */
-	     if (li<ei) {
-		write(1, &c, 1);
-	     }
-	     else {
-		memcpy(wbuf + nwbuf, &c, 1); nwbuf++;
-	     }
+	     soPutc(c);
 	     
 	     ei++;
 	     li++;
@@ -2203,15 +2218,14 @@ int main(int argc, char *argv[]) {
 		/* we need to write the rest...
 		 */
 		sprintf(ec, "%c7", 27);
-		write(1, ec, 2);
-		write(1, line+li, (ei-li));
+		soPuts(ec);
+		soPutm(line+li, (ei-li));
 		sprintf(ec, "%c8", 27);
-		write(1, ec, 2);
+		soPuts(ec);
 	     }
 	  }
        }
-
-       if (nwbuf) write(1, wbuf, nwbuf);
+       soFlush();
     }
   }
   return 0;

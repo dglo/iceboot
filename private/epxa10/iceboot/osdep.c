@@ -240,7 +240,7 @@ int fpga_config(int *p, int nbytes) {
      /* low 32 bits...
       */
      for (t=0, i=0; i<8; i++) {
-	const char c = domid[15-i];
+	const char c = domid[11-i];
 	if (c>='0' && c<='9') t += (c - '0')<<(i*4);
 	else if (c>='a' && c<='f') t += (c - 'a' + 10)<<(i*4);
 	else if (c>='A' && c<='F') t += (c - 'A' + 10)<<(i*4);
@@ -250,7 +250,7 @@ int fpga_config(int *p, int nbytes) {
      /* high 16 bits + ready bit...
       */
      for (t=0, i=0; i<4; i++) {
-	const char c = domid[7-i];
+	const char c = domid[3-i];
 	if (c>='0' && c<='9') t += (c - '0')<<(i*4);
 	else if (c>='a' && c<='f') t += (c - 'a' + 10)<<(i*4);
 	else if (c>='A' && c<='F') t += (c - 'A' + 10)<<(i*4);
