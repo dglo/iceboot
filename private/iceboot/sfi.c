@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.112 $
+ * $Revision: 1.112.2.1 $
  * $Author: arthur $
- * $Date: 2004-06-21 15:28:05 $
+ * $Date: 2004-07-21 16:41:07 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1829,6 +1829,15 @@ static const char *pldVersions(const char *p) {
    return p;
 }
 
+static const char *fpgaType(DOM_HAL_FPGA_TYPES type) {
+   if (type==DOM_HAL_FPGA_TYPE_STF_COM) { return "stf"; }
+   else if (type==DOM_HAL_FPGA_TYPE_DOMAPP) { return "domapp"; }
+   else if (type==DOM_HAL_FPGA_TYPE_CONFIG) { return "configboot"; }
+   else if (type==DOM_HAL_FPGA_TYPE_ICEBOOT) { return "iceboot"; }
+   else if (type==DOM_HAL_FPGA_TYPE_STF_NOCOM) { return "stf-no-comm"; }
+   return "unknown";
+}
+
 static const char *fpgaVersions(const char *p) {
 #define EXPVER(a, b) (expected_versions[a][FPGA_VERSIONS_##b])
    /* FIXME: put the correct address in here... */
@@ -1839,8 +1848,8 @@ static const char *fpgaVersions(const char *p) {
 
    /* print out the versioning info...
     */
-   printf("fpga type    %d\r\n", versions[0]);
-   printf("build number %d\r\n", (versions[2]<<16) | versions[1]);
+   printf("fpga type    %s\r\n", fpgaType(hal_FPGA_query_type()));
+   printf("build number %d\r\n", hal_FPGA_query_build());
    printf("matches?     %s\r\n", 
 	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT,
 				  DOM_HAL_FPGA_COMP_ALL)?"no":"yes");
