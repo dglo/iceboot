@@ -27,5 +27,9 @@ int osInit(int argc, char *argv[]);
 
 int fpga_config(int *addr, int nbytes);
 
+/* invalidate the dcache... */
+void dcacheInvalidateAll(void);
+
+
 
 #endif

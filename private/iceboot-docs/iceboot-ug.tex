@@ -1,9 +1,11 @@
 \documentclass{article}
-\usepackage{graphicx}
 \usepackage{makeidx}
 \usepackage{amssymb}
 \usepackage{url}
 \usepackage[T1]{fontenc}
+\usepackage[pdftex]{graphicx}
+\usepackage[]{hyperref}
+\usepackage{ae}
 
 \makeindex
 
@@ -385,6 +387,34 @@ Channel & Signal \\
 The input mux channels are described in more detail at 
 \url{http://rust.lbl.gov/~gtp/DOM/API/DOM_CPLD_API_v1.0.html}}
 
+\cmd{acq-disc}{nseq readout-mask}{}{Variant of the acq-forced
+command (see below) that triggers on the SPE discriminator.}
+\cmd{acq-forced}{nseq readout-mask}{}{Start a batch of
+\textit{nseq} sequenced ATWD/FADC CPU-forced acqusitions.  
+The \textit{mode} parameter is a bitmask that specifies
+which channels are readout as follows
+\medskip \\
+\begin{tabular}{||l|l||}
+\hline
+Channel & Bitmask Bit   \\ \hline \hline
+ATWD-A Channel 0 & 0x01 \\ \hline
+ATWD-A Channel 1 & 0x02 \\ \hline
+ATWD-A Channel 2 & 0x04 \\ \hline
+ATWD-A Channel 3 & 0x08 \\ \hline
+ATWD-B Channel 0 & 0x10 \\ \hline
+ATWD-B Channel 1 & 0x20 \\ \hline
+ATWD-B Channel 2 & 0x40 \\ \hline
+ATWD-B Channel 3 & 0x80 \\ \hline
+FADC & 0x100 \\
+\hline
+\end{tabular} \\
+\medskip
+This command writes the samples to 'acquisition memory'
+mapped at \$1000000.  It must be dumped using \textit{od}
+or other command.}
+\cmd{acq-pp}{nseq readout-mask}{}{Variant of acq-disc
+that enables ATWD 'ping-pong' mode.  Note that you cannot
+readout the FADC with this command, yet.}
 \cmd{and}{a b}{result}{a and b}
 \cmd{base}{}{address}{Address of number base (10=decimal, 16=hex, ...)}
 \cmd{constant}{a}{name}{Set name to constant value a}

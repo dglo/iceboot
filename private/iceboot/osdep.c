@@ -151,3 +151,6 @@ int waitInputData(int ms) {
    fds[0].events = POLLIN;
    return poll(fds, 1, ms)==1;
 }
+
+void dcacheInvalidateAll(void) {
+}

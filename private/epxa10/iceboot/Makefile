@@ -22,6 +22,7 @@ clean:
 
 SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o fis.o install.o
 YMOBJS = $(CRT0) $(LIBK) ymodem.o osdep.o
+LBOBJS = $(CRT0) $(LIBK) lookback.o
 
 sfi.o: sfi.c $(EPXAH)
 memtests.o: memtests.c $(EPXAH)
@@ -38,8 +39,20 @@ ymodem.elf: $(YMOBJS) $(LIBHAL) $(SYSLIBS) $(KERNELX)
 	$(LD) --script=$(KERNELX) -o ymodem.elf \
 		$(YMOBJS) $(LIBHAL) $(SYSLIBS)
 
+lookback.elf: $(LBOBJS) $(LIBHAL) $(SYSLIBS) $(KERNELX)
+	$(LD) --script=$(KERNELX) -o lookback.elf \
+		$(LBOBJS) $(LIBHAL) $(SYSLIBS)
+
 $(YMODEMBINGZ): ymodem.bin
 	gzip -c ymodem.bin > $(YMODEMBINGZ)
 
 $(SFIBIN): sfi.elf
 	$(OBJCOPY) -O binary $< $(SFIBIN)
+
+$(LOOKBACKBINGZ): lookback.bin
+	gzip -c lookback.bin > $(LOOKBACKBINGZ)
+
+
+
+
+

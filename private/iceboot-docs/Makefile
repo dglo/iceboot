@@ -1,3 +1,5 @@
+all: iceboot-ug.pdf
+
 iceboot-ug.dvi: iceboot-ug.tex iceboot-ug.ind
 	latex iceboot-ug.tex
 
@@ -11,8 +13,7 @@ iceboot-ug.ps: iceboot-ug.dvi
 	dvips -o iceboot-ug.ps iceboot-ug.dvi
 
 iceboot-ug.pdf : iceboot-ug.ps
-	gs -dNOPAUSE -q -dBATCH -sDEVICE=pdfwrite \
-		-sOutputFile=iceboot-ug.pdf iceboot-ug.ps
+	pdflatex iceboot-ug.tex
 
 install: iceboot-ug.pdf iceboot-ug.ps iceboot-ug.dvi
 	cp -v iceboot-ug.pdf iceboot-ug.ps iceboot-ug.dvi ~/public_html/dom

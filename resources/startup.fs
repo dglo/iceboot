@@ -42,7 +42,7 @@ $9008103c constant comrx
 
 $50000000 constant CPLD
 
-s" iceboot.sbi" find if fpga drop $00a04800 comctl ! endif
+s" iceboot.sbi" find if fpga drop $01200000 comctl ! endif
 
 : yorn if s" yes" else s" no" endif type crlf type ;
 
@@ -61,10 +61,33 @@ s" iceboot.sbi" find if fpga drop $00a04800 comctl ! endif
 
 : prt-err base @ comstatus @ &24 rshift &16 base ! . swap base ! drop ;
 
-: echo rcv swap dup constant buf swap send buf free drop;
+: echo rcv swap dup constant buf swap send buf free drop ;
 
 : not 1 and 1 xor ;
 : serial-power CPLD $b + c@ 1 and ;
 
+\
+\ random number generator...
+\
+: rand1 69069 * 1 + dup addr i 4 * + ! ;
+: rand-alloc dup 4 * allocate drop constant addr ;
+: rand rand-alloc dup constant len 0 ?DO rand1 LOOP drop addr len 4 * ;
 
-: echo-mode 2000000000 0 ?DO echo LOOP
+\
+\ echo back a packet, incoming packet should be seed (4 bytes), i
+\ len (4 bytes), ...
+\ outgoing packet is a random packet of len 32 bit words, consisting
+\ of: X(n+1) = X(n)*69069 + 1
+\ where X(0) <- seed
+\
+: echo-mk-pkt rcv drop dup @ swap dup 4 + @ swap free drop rand ; 
+: echo-pkt echo-mk-pkt send addr free drop ;
+
+: echo-mode 2000000000 0 ?DO echo LOOP ;
+: echo-pkt-mode 2000000000 0 ?DO echo-pkt LOOP ;
+
+\ $11223344 $90081058 !
+\ $15566 $9008105c ! 
+
+\ serial-power not if echo-mode endif
+

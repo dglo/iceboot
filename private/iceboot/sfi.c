@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.70.2.2 $
+ * $Revision: 1.85 $
  * $Author: arthur $
- * $Date: 2003-08-01 01:07:57 $
+ * $Date: 2003-10-27 18:13:32 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -110,6 +110,14 @@
 #define STR(a) #a
 #define STRING(a) STR(a)
 
+/* location and length of the buffer
+ * used for acquisition...
+ *
+ * these are initialized in osInit in osdep.c...
+ */
+short *acqAddr = NULL;
+int acqLen = 0;
+
 void delay(int);
 
 static const char *udelay(const char *p);
@@ -128,6 +136,9 @@ typedef enum {
    EXC_STACK_UNDERFLOW = 1,
    EXC_STACK_OVERFLOW = 2
 } ExceptionCodes;
+
+enum { ACQ_MODE_CPU = 1, ACQ_MODE_DISC = 2, ACQ_MODE_PP = 3 };
+
 static jmp_buf jenv;
 
 void push(int v) { 
@@ -514,26 +525,51 @@ static const char *iffunc(const char *pr) {
   return pr;
 }
 
-#if 0
 /* do begin until loop...
  */
 static const char *begin(const char *p) {
-   /* FIXME: skip whitespace...
-    */
+   char line[128];
 
+   /* initialize line */
+   strcpy(line, "");
+   
    /* keep getting words until we get a ';' or UNTIL...
     */
-
-   /* execute line...
    while (1) {
-      const int ret = getLine(line);
+      char word[128];
+      int wlen = 0;
+
+      /* skip whitespace...
+       */
+      while (isspace(*p)) p++;
+  
+      /* get next word...
+       */
+      while (*p && !isspace(*p)) { word[wlen] = *p; p++; wlen++; }
+      word[wlen] = 0;
+
+      if (strcmp(word, "until")==0) {
+	 break;
+      }
+      else if (strcmp(word, ";")==0 || *p==0) {
+	 printf("begin: end of line with no until!\r\n");
+	 return p;
+      }
+      else {
+	 strcat(line, word);
+	 strcat(line, " ");
+      }
+   }
+   
+   /* execute line until condition is true...
+    */
+   while (1) {
+      newLine(line);
       if (pop()!=0) break;
    }
-   */
    
    return p;
 }
-#endif
 
 /* returns: 0 not a number, 1 number num <- number
  */
@@ -749,6 +785,128 @@ static const char *sendMsg(const char *p) {
       printf("send: unable to send msg!\r\n");
    }
 
+   return p;
+}
+
+/* simulate "real" acquisition to sdram...
+ * 
+ * fill upper 16M with data...
+ */
+static void acq(int mask, int ntrig, int mode) {
+   int halTrig = 0;
+   short *addr = acqAddr;
+   short *ch0 = NULL, *ch1 = NULL, *ch2 = NULL, *ch3 = NULL, 
+      *ch4 = NULL, *ch5 = NULL, *ch6 = NULL, *ch7 = NULL, *fadc = NULL;
+   short *clkbuf;
+   int i, incr = 8;
+   int maxacq;
+   long long clk0, clk1;
+
+   if (mask & 0x0f) {
+     halTrig |= HAL_FPGA_TEST_TRIGGER_ATWD0;
+     if (mask & 1) { ch0 = addr; addr += 128; incr += 128; }
+     if (mask & 2) { ch1 = addr; addr += 128; incr += 128; }
+     if (mask & 4) { ch2 = addr; addr += 128; incr += 128; }
+     if (mask & 8) { ch3 = addr; addr += 128; incr += 128; }
+   }
+   if ((mask & 0xf0) && (mode != ACQ_MODE_PP)) {
+     halTrig |= HAL_FPGA_TEST_TRIGGER_ATWD1;
+     if (mask & 16) { ch4 = addr; addr += 128; incr += 128; }
+     if (mask & 32) { ch5 = addr; addr += 128; incr += 128; }
+     if (mask & 64) { ch6 = addr; addr += 128; incr += 128; }
+     if (mask & 128) { ch7 = addr; addr += 128; incr += 128; }
+   }
+   if ((mask & 0x100) && (mode != ACQ_MODE_PP)) { 
+     halTrig |= HAL_FPGA_TEST_TRIGGER_FADC;
+     fadc = addr;
+     addr += 256;
+     incr += 256;
+   }
+   clkbuf = addr;
+
+   maxacq = ( acqLen/sizeof(short)) / incr;
+   if (ntrig > maxacq || ntrig == 0) ntrig = maxacq;
+   
+   /* enable ping-pong mode if selected */
+   if (mode == ACQ_MODE_PP)
+       hal_FPGA_TEST_enable_ping_pong();
+   
+   for (i=0; i < ntrig; i++) {
+
+       if (mode != ACQ_MODE_PP) {
+           /* start trigger */
+           if (mode == ACQ_MODE_DISC) {
+               hal_FPGA_TEST_trigger_disc(halTrig);
+           }
+           else if (mode == ACQ_MODE_CPU) {
+               hal_FPGA_TEST_trigger_forced(halTrig);
+           }
+           
+           /* wait for done...
+            */
+           while (!hal_FPGA_TEST_readout_done(halTrig)) ;
+
+           /*
+            * readout the ATWD timestamp clocks
+            */
+           clk0 = hal_FPGA_TEST_get_atwd0_clock();
+           clk1 = hal_FPGA_TEST_get_atwd1_clock();
+           memcpy(clkbuf, &clk0, 8);
+           memcpy(clkbuf+4, &clk1, 8);
+           
+           /* now readout...
+            */
+           hal_FPGA_TEST_readout(ch0, ch1, ch2, ch3, 
+                                 ch4, ch5, ch6, ch7, 128, 
+                                 fadc, 256, halTrig);
+       }
+       else {         
+           /* Wait until ping-pong trigger and then readout */
+           hal_FPGA_TEST_readout_ping_pong(ch0, ch1, ch2, ch3, 128, mask); 
+
+           /* Get the ATWD timestamp */
+           clk0 = hal_FPGA_TEST_get_ping_pong_clock();
+           memcpy(clkbuf, &clk0, 8);
+           
+           /* Indicate that read is done for that ATWD */
+           hal_FPGA_TEST_readout_ping_pong_done();
+       }
+
+       if (ch0) ch0 += incr; 
+       if (ch1) ch1 += incr; 
+       if (ch2) ch2 += incr; 
+       if (ch3) ch3 += incr;
+       if (ch4) ch4 += incr; 
+       if (ch5) ch5 += incr; 
+       if (ch6) ch6 += incr; 
+       if (ch7) ch7 += incr;
+       if (fadc) fadc += incr; 
+       clkbuf += incr;
+   }
+
+   /* disable ping-pong mode if selected */
+   if (mode == ACQ_MODE_PP)
+       hal_FPGA_TEST_disable_ping_pong();
+}
+
+static const char *acq_cpu(const char *p) {
+   const int mask = pop();
+   const int ntrig = pop();
+   acq(mask, ntrig, ACQ_MODE_CPU);
+   return p;
+}
+
+static const char *acq_disc(const char *p) {
+   const int mask = pop();
+   const int ntrig = pop();
+   acq(mask, ntrig, ACQ_MODE_DISC);
+   return p;
+}
+
+static const char *acq_pp(const char *p) {
+   const int mask = pop();
+   const int ntrig = pop();
+   acq(mask, ntrig, ACQ_MODE_PP);
    return p;
 }
 
@@ -1103,6 +1261,45 @@ static const char *odump(const char *p) {
       if (i<cnt-2) printf("%08x ", addr[2]);
       if (i<cnt-3) printf("%08x ", addr[3]);
       printf("\r\n");
+   }
+   return p;
+}
+
+/* dump memory at address count -- test version...
+ *
+ * unless you've a strong stomach, avert your
+ * eyes from this code, the intention is to keep
+ * the whole routine in icache...
+ */
+static void pch(char ch) {
+   unsigned uch = ch;
+   /* wait for fifo to clear */
+   while (((*(volatile unsigned *)0x7fffc28c) & 0x1f)>=15) ;
+   *(volatile unsigned *)0x7fffc290 = uch;
+}
+
+static void phex(unsigned v) {
+   char digits[] = "0123456789abcdef";
+   int shift = 28;
+   while (shift>=0) {
+      pch( digits[(v>>shift)&0xf] );
+      shift-=4;
+   }
+   pch(' ');
+}
+
+static const char *odumpt(const char *p) {
+   const int cnt = pop();
+   unsigned *addr = (unsigned *) pop();
+   int i;
+
+   for (i=0; i<cnt; i+=4, addr+=4) {
+      phex((unsigned) addr);
+      phex(addr[0]);
+      if (i<cnt-1) phex(addr[1]);
+      if (i<cnt-2) phex(addr[2]);
+      if (i<cnt-3) phex(addr[3]);
+      pch('\r'); pch('\n');
    }
    return p;
 }
@@ -1466,7 +1663,21 @@ static const char *doInstall(const char *p) {
    return p;
 }
 
+static const char *pldVersions(const char *p) {
+   /* print out the versioning info...
+    */
+   printf("version      %d [%d]\r\n", halGetVersion(), halGetHWVersion());
+   printf("build number %d [%d]\r\n", halGetBuild(), halGetHWBuild());
+   printf("matches?     %s\r\n", 
+	  halGetVersion()==halGetHWVersion() ? "yes" : "no");
+   return p;
+}
+
+
 static const char *fpgaVersions(const char *p) {
+#define EXPVER(a) \
+  (expected_versions[FPGA_VERSIONS_TYPE_ICEBOOT][FPGA_VERSIONS_##a])
+
    /* FIXME: put the correct address in here... */
    unsigned *versions = (unsigned *) 0x90000000;
    
@@ -1474,19 +1685,40 @@ static const char *fpgaVersions(const char *p) {
     */
    printf("fpga type    %d\r\n", versions[0]);
    printf("build number %d\r\n", (versions[2]<<16) | versions[1]);
+   printf("matches?     %s\r\n", 
+	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT, 
+				  DOM_HAL_FPGA_COMP_ALL)?"no":"yes");
    printf("versions:\r\n");
-   printf("  com_fifo           %d\r\n", versions[FPGA_VERSIONS_COM_FIFO]);
-   printf("  com_dp             %d\r\n", versions[FPGA_VERSIONS_COM_DP]);
-   printf("  daq                %d\r\n", versions[FPGA_VERSIONS_DAQ]);
-   printf("  pulsers            %d\r\n", versions[FPGA_VERSIONS_PULSERS]);
-   printf("  discriminator_rate %d\r\n", 
-	  versions[FPGA_VERSIONS_DISCRIMINATOR_RATE]);
-   printf("  local_coinc        %d\r\n", versions[FPGA_VERSIONS_LOCAL_COINC]);
-   printf("  flasher_board      %d\r\n", 
-	  versions[FPGA_VERSIONS_FLASHER_BOARD]);
-   printf("  trigger            %d\r\n", versions[FPGA_VERSIONS_TRIGGER]);
-   printf("  local_clock        %d\r\n", versions[FPGA_VERSIONS_LOCAL_CLOCK]);
-   printf("  supernova          %d\r\n", versions[FPGA_VERSIONS_SUPERNOVA]);
+   printf("  com_fifo           %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_COM_FIFO], EXPVER(COM_FIFO));
+   
+   printf("  com_dp             %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_COM_DP], EXPVER(COM_DP));
+
+   printf("  daq                %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_DAQ], EXPVER(DAQ));
+
+   printf("  pulsers            %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_PULSERS], EXPVER(PULSERS));
+
+   printf("  discriminator_rate %d [%d]\r\n",
+	  versions[FPGA_VERSIONS_DISCRIMINATOR_RATE], 
+	  EXPVER(DISCRIMINATOR_RATE));
+
+   printf("  local_coinc        %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_LOCAL_COINC], EXPVER(LOCAL_COINC));
+
+   printf("  flasher_board      %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_FLASHER_BOARD], EXPVER(FLASHER_BOARD));
+
+   printf("  trigger            %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_TRIGGER], EXPVER(TRIGGER));
+
+   printf("  local_clock        %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_LOCAL_CLOCK], EXPVER(LOCAL_CLOCK));
+
+   printf("  supernova          %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(SUPERNOVA));
 
    return p;
 }
@@ -1527,6 +1759,7 @@ int main(int argc, char *argv[]) {
      { "writeDAC", writeDAC },
      { "usleep", udelay },
      { "od", odump },
+     { "odt", odumpt },
      { "reboot", reboot },
      { "analogMuxInput", analogMuxInput },
      { "prtTemp", prtTemp },
@@ -1559,7 +1792,12 @@ int main(int argc, char *argv[]) {
      { "cp", memcp },
      { "install", doInstall },
      { "fpga-versions", fpgaVersions },
+     { "pld-versions", pldVersions },
      { "boot-req", reqBoot },
+     { "begin", begin },
+     { "acq-forced" , acq_cpu },
+     { "acq-disc" , acq_disc },
+     { "acq-pp" , acq_pp },
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -1690,11 +1928,6 @@ int main(int argc, char *argv[]) {
 
   sourceStartup();
 
-  /* FIXME: HACK!!!  kalle will fix this in firmware,
-   * for now, we work around it...
-   */
-  halUSleep(10000);
-
   printf(" Iceboot (%s) build %s.....\r\n", STRING(PROJECT_TAG),
 	 STRING(ICESOFT_BUILD));
   
@@ -1719,9 +1952,6 @@ int main(int argc, char *argv[]) {
 
   write(1, "\r\n> ", 4);
   while (!done) {
-    int nr;
-    char c;
-
     if (ei==linesz) {
       printf("!!!! line too long!!!\r\n");
       break;
@@ -1755,222 +1985,238 @@ int main(int argc, char *argv[]) {
        }
     }
     
-    /* read the next value...
-     */
-    nr = read(0, &c, 1);
-    
-    if (nr<=0) {
-       printf("!!!! can't read from stdin!!!!\r\n");
-       continue;
-    }
+    while (1) {
+       const int buflen = 128;
+       char buf[buflen];
+       char wbuf[buflen*2]; /* '\r' -> '\r\n' conversion... */
+       int nwbuf = 0;
+       int nr = read(0, buf, sizeof(buf));
+       int idx;
 
+       if (nr<=0) {
+	  printf("!!!! can't read from stdin!!!!\r\n");
+	  continue;
+       }
+
+       for (idx=0; idx<nr; idx++) {
+	  char c = buf[idx];
+	  
 #if 0
-    if (nr==1) {
-       printf("\r\n[%d] 0x%02x\r\n", escaped, c);
-    }
+	  printf("\r\n[%d] 0x%02x\r\n", escaped, c);
 #endif
     
-    
-    if (escaped) {
-       char mv[8];
-       int lineflip = 0;
-       
-       if (c=='A') {
-	  /* up arrow... */
-	  if (bl<hl-1 && bl<nl) {
-	     bl++;
-	     lineflip = 1;
+	  if (escaped) {
+	     char mv[8];
+	     int lineflip = 0;
+	     
+	     if (c=='A') {
+		/* up arrow... */
+		if (bl<hl-1 && bl<nl) {
+		   bl++;
+		   lineflip = 1;
+		}
+	     }
+	     else if (c=='B') {
+		/* down... */
+		if (bl>0) {
+		   bl--;
+		   lineflip = 1;
+		}
+	     }
+	     else if (c=='C') {
+		/* right... */
+		if (li<ei) {
+		   sprintf(mv, "%c[C", 27);
+		   write(1, mv, strlen(mv));
+		   li++;
+		}
+	     }
+	     else if (c=='D') {
+		/* left... */
+		if (li>0) {
+		   sprintf(mv, "%c[D", 27);
+		   write(1, mv, strlen(mv));
+		   li--;
+		}
+	     }
+	     else if (c=='O') {
+		escaped = 1;
+		continue;
+	     }
+	     else if (c=='[') {
+		escaped = 1;
+		continue;
+	     }
+	     
+	     if (lineflip) {
+		const int idx = (hl - bl - 1)%nl;
+		char cmd[8];
+		
+		/* move to beginning of line...
+		 */
+		sprintf(cmd, "%c[D", 27);
+		while (li>0) {
+		   write(1, cmd, strlen(cmd));
+		   li--;
+		}
+		
+		/* clear to end of line
+		 */
+		sprintf(cmd, "%c[K", 27);
+		write(1, cmd, strlen(cmd));
+		
+		/* add the line...
+		 */
+		strcpy(line, lines[idx]);
+		li = strlen(line);
+		ei = strlen(line);
+		
+		/* write the line...
+		 */
+		write(1, line, strlen(line));
+	     }
+	     
+	     escaped = 0;
+	     continue;
 	  }
-       }
-       else if (c=='B') {
-	  /* down... */
-	  if (bl>0) {
-	     bl--;
-	     lineflip = 1;
-	  }
-       }
-       else if (c=='C') {
-	  /* right... */
-	  if (li<ei) {
-	     sprintf(mv, "%c[C", 27);
-	     write(1, mv, strlen(mv));
-	     li++;
-	  }
-       }
-       else if (c=='D') {
-	  /* left... */
-	  if (li>0) {
-	     sprintf(mv, "%c[D", 27);
-	     write(1, mv, strlen(mv));
-	     li--;
-	  }
-       }
-       else if (c=='O') {
-	  escaped = 1;
-	  continue;
-       }
-       else if (c=='[') {
-	  escaped = 1;
-	  continue;
-       }
-
-       if (lineflip) {
-	  const int idx = (hl - bl - 1)%nl;
-	  char cmd[8];
-
-	  /* move to beginning of line...
-	   */
-	  sprintf(cmd, "%c[D", 27);
-	  while (li>0) {
-	     write(1, cmd, strlen(cmd));
-	     li--;
-	  }
-
-	  /* clear to end of line
-	   */
-	  sprintf(cmd, "%c[K", 27);
-	  write(1, cmd, strlen(cmd));
-
-	  /* add the line...
-	   */
-	  strcpy(line, lines[idx]);
-	  li = strlen(line);
-	  ei = strlen(line);
-
-	  /* write the line...
-	   */
-	  write(1, line, strlen(line));
-       }
-       
-       escaped = 0;
-       continue;
-    }
-    
-    if (c==27) { 
-       /* esc character...
-	*/
-       escaped = 1;
-    }
-    else if (c==0x06) {
-       int snw = 0;
-       char mv[16];
-       
-       /* ^F forward word: skip whitespace until non-whitespace skip
-        * non whitespace until space or end of line
-        */
-       while (1) {
-	  if (li<ei) {
-	     if (!snw) snw = !isspace(line[li]);
-	     sprintf(mv, "%c[C", 27);
-	     write(1, mv, strlen(mv));
-	     li++;
-
-	     if (snw && li<ei && isspace(line[li])) break;
-	  }
-	  else break;
-       }
-    }
-    else if (c==0x02) {
-       int snw = 0;
-       char mv[16];
-       
-       /* ^B back word: skip whitespace backwards, 
-	* skip non-whitespace backwards until whitespace 
-	* is previous
-	*/
-       while (1) {
-	  if (li>0) {
-	     sprintf(mv, "%c[D", 27);
-	     write(1, mv, strlen(mv));
-	     li--;
-
-	     if (!snw) snw = !isspace(line[li]);
-
-	     if (snw && li>0 && isspace(line[li-1])) break;
-	  }
-	  else break;
-       }
-    }
-    else if (c=='\b' || c==0x7f) {
-       if (li>0) {
-	  char cmd[8];
-	  sprintf(cmd, "%c%c[K", '\b', 27);
-	  write(1, cmd, strlen(cmd));
-
-	  if (li<ei) {
-	     /* we need to write the rest...
+	  
+	  if (c==27) { 
+	     /* esc character...
 	      */
-	     sprintf(cmd, "%c7", 27);
-	     write(1, cmd, 2);
-	     write(1, line+li, (ei-li));
-	     sprintf(cmd, "%c8", 27);
-	     write(1, cmd, 2);
-	  
-	     memmove(line+li-1, line+li, ei-li);
+	     escaped = 1;
 	  }
-	  li--;
-	  ei--;
-       }
-    }
-    else if (c=='\r') {
-       write(1, "\r\n", 2);
-       line[ei] = 0;
-       
-       /* before we parse the line, we save it in a ring buffer...
-	*/
-       if (ei>0) {
-	  if (hl>=nl) free(lines[hl%nl]);
-       
-	  lines[hl%nl] = strdup(line);
-	  hl++;
-       
-	  if (newLine(line)) {
-	     printf("!!! error new line\r\n");
-	     done = 1;
-	     break;
+	  else if (c==0x06) {
+	     int snw = 0;
+	     char mv[16];
+	     
+	     /* ^F forward word: skip whitespace until non-whitespace skip
+	      * non whitespace until space or end of line
+	      */
+	     while (1) {
+		if (li<ei) {
+		   if (!snw) snw = !isspace(line[li]);
+		   sprintf(mv, "%c[C", 27);
+		   write(1, mv, strlen(mv));
+		   li++;
+		   
+		   if (snw && li<ei && isspace(line[li])) break;
+		}
+		else break;
+	     }
+	  }
+	  else if (c==0x02) {
+	     int snw = 0;
+	     char mv[16];
+	     
+	     /* ^B back word: skip whitespace backwards, 
+	      * skip non-whitespace backwards until whitespace 
+	      * is previous
+	      */
+	     while (1) {
+		if (li>0) {
+		   sprintf(mv, "%c[D", 27);
+		   write(1, mv, strlen(mv));
+		   li--;
+		   
+		   if (!snw) snw = !isspace(line[li]);
+		   
+		   if (snw && li>0 && isspace(line[li-1])) break;
+		}
+		else break;
+	     }
+	  }
+	  else if (c=='\b' || c==0x7f) {
+	     if (li>0) {
+		char cmd[8];
+		sprintf(cmd, "%c%c[K", '\b', 27);
+		write(1, cmd, strlen(cmd));
+		
+		if (li<ei) {
+		   /* we need to write the rest...
+		    */
+		   sprintf(cmd, "%c7", 27);
+		   write(1, cmd, 2);
+		   write(1, line+li, (ei-li));
+		   sprintf(cmd, "%c8", 27);
+		   write(1, cmd, 2);
+		   
+		   memmove(line+li-1, line+li, ei-li);
+		}
+		li--;
+		ei--;
+	     }
+	  }
+	  else if (c=='\r') {
+	     /* we need to flush on '\r' so things
+	      * come out in the right order...
+	      */
+	     memcpy(wbuf + nwbuf, "\r\n", 2); nwbuf+=2;
+	     write(1, wbuf, nwbuf);
+	     nwbuf = 0;
+
+	     line[ei] = 0;
+
+	     /* before we parse the line, we save it in a ring buffer...
+	      */
+	     if (ei>0) {
+		if (hl>=nl) free(lines[hl%nl]);
+		
+		lines[hl%nl] = strdup(line);
+		hl++;
+		
+		if (newLine(line)) {
+		   printf("!!! error new line\r\n");
+		   done = 1;
+		   break;
+		}
+	     }
+	     
+	     bl = -1;
+	     li = ei = 0;
+	     memcpy(wbuf + nwbuf, "> ", 2); nwbuf+=2;
+	  }
+	  else {
+	     /* make space for character...
+	      */
+	     if (li<ei) memmove(line+li+1, line+li, ei-li);
+	     
+	     /* insert character...
+	      */
+	     line[li] = c;
+	     
+	     /* echo character if we're in the middle
+	      * of a line -- otherwise, we can delay it...
+	      */
+	     if (li<ei) {
+		write(1, &c, 1);
+	     }
+	     else {
+		memcpy(wbuf + nwbuf, &c, 1); nwbuf++;
+	     }
+	     
+	     ei++;
+	     li++;
+	     
+	     if (li<ei) {
+		char ec[4];
+		
+		/* we need to write the rest...
+		 */
+		sprintf(ec, "%c7", 27);
+		write(1, ec, 2);
+		write(1, line+li, (ei-li));
+		sprintf(ec, "%c8", 27);
+		write(1, ec, 2);
+	     }
 	  }
        }
-       
-       bl = -1;
-       li = ei = 0;
-       
-       /* echo new line...
-	*/
-       write(1, "> ", 2);
-    }
-    else {
-       /* make space for character...
-	*/
-       if (li<ei) memmove(line+li+1, line+li, ei-li);
-       
-       /* insert character...
-	*/
-       line[li] = c;
 
-       /* echo character...
-	*/
-       write(1, &c, 1);
-
-       ei++;
-       li++;
-
-       if (li<ei) {
-	  char ec[4];
-	  
-	  /* we need to write the rest...
-	   */
-	  sprintf(ec, "%c7", 27);
-	  write(1, ec, 2);
-	  write(1, line+li, (ei-li));
-	  sprintf(ec, "%c8", 27);
-	  write(1, ec, 2);
-       }
+       if (nwbuf) write(1, wbuf, nwbuf);
     }
   }
-
   return 0;
 }
-
+  
 static const char *udelay(const char *p) {
    halUSleep(pop());
    return p;

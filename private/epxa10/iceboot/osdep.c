@@ -120,13 +120,20 @@ static const char *prtPLL(const char *p) {
    return p;
 }
 
-
 int osInit(int argc, char *argv[]) { 
+   extern short *acqAddr;
+   extern int acqLen;
+   
     addConstantBucket("REGISTERS", REGISTERS);
 #if defined(CPLD_ADDR)
     addConstantBucket("CPLD", CPLD_ADDR);
 #endif
     addCFuncBucket("prtPLL", prtPLL);
+
+    /* setup acq buffers... */
+    acqAddr = (short *)(MEMORY_SIZE/2);
+    acqLen = MEMORY_SIZE/2;
+
     return 0; 
 }
 
@@ -140,9 +147,10 @@ int fpga_config(int *p, int nbytes) {
   int *idcode = (int *) (REGISTERS + 0x8);
   int *cdata = (int *) (REGISTERS + 0x148);
   int i;
+  const int rbtreq = halIsFPGALoaded() && hal_FPGA_TEST_is_comm_avail();
 
   /* request reboot from DOR */
-  if (halIsFPGALoaded()) hal_FPGA_TEST_request_reboot();
+  if (rbtreq) hal_FPGA_TEST_request_reboot();
 
   /* check magic number...
    */
@@ -164,10 +172,8 @@ int fpga_config(int *p, int nbytes) {
   }
 
   /* wait for reboot granted from DOR */
-  if (halIsFPGALoaded()) {
-     int i;
-     for (i=0; i<1000 && !hal_FPGA_TEST_is_reboot_granted(); i++) 
-	halUSleep(10);
+  if (rbtreq) {
+     while (!hal_FPGA_TEST_is_reboot_granted()) ;
   }
 
   /* setup clock */
@@ -217,7 +223,41 @@ int fpga_config(int *p, int nbytes) {
       return 10;
     }
   }
-  
+
+  /* load domid here so that "hardware" domid
+   * works... sample domid: 710200073c7214d0
+   *
+   * FIXME: test fpga registers are used directly
+   * here.  i'm not sure how else to do this, exporting
+   * a fpga hal routine doesn't seem very nice, maybe
+   * we should just export the fpga config routine from
+   * the hal...
+   */
+  {  const char *domid = halGetBoardID();
+     unsigned t;
+     int i;
+     
+     /* low 32 bits...
+      */
+     for (t=0, i=0; i<8; i++) {
+	const char c = domid[15-i];
+	if (c>='0' && c<='9') t += (c - '0')<<(i*4);
+	else if (c>='a' && c<='f') t += (c - 'a' + 10)<<(i*4);
+	else if (c>='A' && c<='F') t += (c - 'A' + 10)<<(i*4);
+     }
+     *(volatile unsigned *)0x90081058 = t;
+
+     /* high 16 bits + ready bit...
+      */
+     for (t=0, i=0; i<4; i++) {
+	const char c = domid[7-i];
+	if (c>='0' && c<='9') t += (c - '0')<<(i*4);
+	else if (c>='a' && c<='f') t += (c - 'a' + 10)<<(i*4);
+	else if (c>='A' && c<='F') t += (c - 'A' + 10)<<(i*4);
+     }
+     *(volatile unsigned *)0x9008105c = t | 0x10000;
+  }
+
   return 0;
 }
 
@@ -232,3 +272,32 @@ int waitInputData(int ms) {
    return isInputData();
 }
 
+void dcacheInvalidateAll(void) {
+   unsigned _tmp1, _tmp2;
+   asm volatile (
+		 "mov    %0, #0;"
+		 "1: "
+		 "mov    %1, #0;"
+		 "2: "
+		 "orr    r0,%0,%1;"
+		 "mcr    p15,0,r0,c7,c14,2;"  /* clean index in DCache */
+		 "add    %1,%1,%2;"
+		 "cmp    %1,%3;"
+		 "bne    2b;"
+		 "add    %0,%0,#0x04000000;"  /* get to next index */
+		 "cmp    %0,#0;"
+		 "bne    1b;"
+		 "mcr    p15,0,r0,c7,c10,4;" /* drain the write buffer */
+		 : "=r" (_tmp1), "=r" (_tmp2)
+		 : "I" (0x20),
+		 "I" (0x80)
+		 : "r0" /* Clobber list */
+		 );
+   
+   asm volatile ("mov    r1,#0;"
+		 "mcr    p15,0,r1,c7,c6,0;" /* flush d-cache */
+		 "mcr    p15,0,r1,c8,c6,0;" /* flush DTLB only */
+		 :
+		 :
+		 : "r1" /* clobber list */);
+}
