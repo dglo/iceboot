@@ -139,10 +139,10 @@ int fpga_config(int *p, int nbytes) {
   int *idcode = (int *) (REGISTERS + 0x8);
   int *cdata = (int *) (REGISTERS + 0x148);
   int i;
-  const int rbtreq = halIsFPGALoaded() && hal_FPGA_TEST_is_comm_avail();
+  const int rbtreq = halIsFPGALoaded() && hal_FPGA_is_comm_avail();
 
   /* request reboot from DOR */
-  if (rbtreq) hal_FPGA_TEST_request_reboot();
+  if (rbtreq) hal_FPGA_request_reboot();
 
   /* check magic number...
    */
@@ -165,7 +165,7 @@ int fpga_config(int *p, int nbytes) {
 
   /* wait for reboot granted from DOR */
   if (rbtreq) {
-     while (!hal_FPGA_TEST_is_reboot_granted()) ;
+     while (!hal_FPGA_is_reboot_granted()) ;
   }
 
   /* setup clock */
@@ -221,21 +221,24 @@ int fpga_config(int *p, int nbytes) {
    *
    * FIXME: test fpga registers are used directly
    * here.  i'm not sure how else to do this, exporting
-   * a fpga hal routine doesn't seem very nice, maybe
+   * an fpga hal routine doesn't seem very nice, maybe
    * we should just export the fpga config routine from
-   * the hal...
+   * the hal -- however, we don't want anyone else except
+   * iceboot reloading the fpga probably...
    */
-  {  unsigned long long domid = halGetBoardIDRaw();
+  {  
+     unsigned long long domid = halGetBoardIDRaw();
+     unsigned base = 
+        (hal_FPGA_query_type()==DOM_HAL_FPGA_TYPE_DOMAPP) ?
+        0x90000530 : 0x90081058;
      
      /* low 32 bits...
       */
-     *(volatile unsigned *)0x90081058 = domid&0xffffffff;
+     *(volatile unsigned *)(base) = domid&0xffffffff;
 
      /* high 16 bits + ready bit...
-      *
-      * FIXME: we have to move the ready bit...
       */
-     *(volatile unsigned *)0x9008105c = (domid>>32) | 0x10000;
+     *(volatile unsigned *)(base+4) = (domid>>32) | 0x10000;
   }
 
   return 0;
@@ -330,4 +333,5 @@ void dcacheInvalidateAll(void) {
 		 : "r1" /* clobber list */);
 }
 
+void osDumpFlash(void) {}
 

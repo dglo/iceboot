@@ -28,6 +28,6 @@ int fb_cpld_config(int *addr, int nbytes);
 /* invalidate the dcache... */
 void dcacheInvalidateAll(void);
 
-
+void osDumpFlash(void);
 
 #endif

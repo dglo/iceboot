@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.112.2.1 $
- * $Author: arthur $
- * $Date: 2004-07-21 16:41:07 $
+ * $Revision: 1.116 $
+ * $Author: jkelley $
+ * $Date: 2004-09-27 15:00:38 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -100,8 +100,7 @@
 #include "zlib.h"
 #include "sfi.h"
 #include "iceboot/memtests.h"
-#include "hal/DOM_MB_pld.h"
-#include "hal/DOM_MB_fpga.h"
+#include "hal/DOM_MB_hal.h"
 #include "dom-fpga/fpga-versions.h"
 #include "iceboot/flash.h"
 #include "iceboot/fis.h"
@@ -778,7 +777,7 @@ static const char *rcvMsg(const char *p) {
    char *msg = (char *) malloc(4096);
    char *tmp = NULL;
    int type, len;
-   int ret = hal_FPGA_TEST_receive(&type, &len, msg);
+   int ret = hal_FPGA_receive(&type, &len, msg);
 
    if (ret) {
       printf("rcv: unable to receive msg!\r\n");
@@ -803,7 +802,7 @@ static const char *sendMsg(const char *p) {
    const char *addr = (const char *) pop();
    const int type = pop();
    
-   if (hal_FPGA_TEST_send(type, len, addr)) {
+   if (hal_FPGA_send(type, len, addr)) {
       printf("send: unable to send msg!\r\n");
    }
 
@@ -949,8 +948,8 @@ static int readBaseADC(void) { return halReadBaseADC(); }
 static const char *reqBoot(const char *p) {
   /* request reboot from DOR */
   if (halIsFPGALoaded()) {
-     hal_FPGA_TEST_request_reboot();
-     while (!hal_FPGA_TEST_is_reboot_granted()) ;
+     hal_FPGA_request_reboot();
+     while (!hal_FPGA_is_reboot_granted()) ;
   }
   
   return p;
@@ -1015,6 +1014,16 @@ static const char *disableLED(const char *p) {
 static const char *setLEDdelay(const char *p) {
    int delay = pop();
    hal_FPGA_TEST_set_atwd_LED_delay(delay);
+   return p;
+}
+
+static const char *enableFB(const char *p) {
+   hal_FB_enable();
+   return p;
+}
+
+static const char *disableFB(const char *p) {
+   hal_FB_disable();
    return p;
 }
 
@@ -1548,6 +1557,13 @@ static const char *domID(const char *p) {
 
 static const char *hvid(const char *p) {
    const char *id = halHVSerial();
+   push((int) id);
+   push(strlen(id));
+   return p;
+}
+
+static const char *fbid(const char *p) {
+   const char *id = hal_FB_get_serial();
    push((int) id);
    push(strlen(id));
    return p;
@@ -2371,6 +2387,11 @@ static int pskEchoTest(int ich, int channel, int npackets) {
 
 #endif
 
+static const char *doDumpFlash(const char *p) {
+   osDumpFlash();
+   return p;
+}
+
 int main(int argc, char *argv[]) {
   char *line;
   const int linesz = 256;
@@ -2454,12 +2475,16 @@ int main(int argc, char *argv[]) {
      { "enableLED", enableLED },
      { "disableLED", disableLED },
      { "setLEDdelay", setLEDdelay },
+     { "enableFB", enableFB },
+     { "disableFB", disableFB },
+     { "fbid", fbid },
 #if defined(PSKHACK)
      { "scan-angles", scanAngles },
      { "dump-cordic", dumpCordic },
      { "dump-iq", dumpIQ },
      { "psk-lock", doPskLock },
 #endif
+     { "dump-flash", doDumpFlash },
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 

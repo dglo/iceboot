@@ -113,3 +113,6 @@ CPLD $f + c@ constant boot-status
 : prt-boot-status-1 prt-n-por prt-n-reset prt-comm-reset ;
 : prt-boot-status prt-boot-status-0 prt-boot-status-1 ;
 
+: no-comm s" stf-nocomm.sbi" find if fpga endif ;
+: wiggle s" wiggle" find if exec endif ;
+

@@ -80,12 +80,7 @@ int executeImage(const void *addr, int nbytes) {
     return 0;
 }
 
-/* FIXME: before we dump, make a copy and
- * fixup all the addresses so they map to 0x41000000
- * when this is done, we can remove the address in
- * mmap() in flashdrv.c (get_flash_limits())
- */
-static void dumpflash(int sig) {
+void osDumpFlash(void) {
    int fd;
    const char* dumpfile = getenv("FLASH_DUMP_FILE");
    if (0 == dumpfile) {
@@ -133,8 +128,6 @@ int osInit(int argc, char *argv[]) {
 
     /* do this for simboot IO consistency */
     setvbuf(stdout, (char *)0, _IONBF, 0);
-
-    signal(SIGUSR1, dumpflash);
 
     return 0;
 }

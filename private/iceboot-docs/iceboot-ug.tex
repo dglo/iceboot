@@ -436,7 +436,9 @@ with length dataLength.
 
 \cmd{crlf}{}{stringAddress stringLength}{Push the carraige return 
 line feed character address and length to the stack}
-\cmd{disableCurrents}{}{result}{address of flag to set to disable printing of currents on the top of the screen}
+\cmd{disableCurrents}{}{result}{address of flag to set to disable printing
+  of currents on the top of the screen}
+\cmd{disableFB}{}{}{Power-down and disable the flasherboard}
 \cmd{disableHV}{}{}{Disable PMT high-voltage base}
 \cmd{disableLED}{}{}{Disable the onboard LED}
 \cmd{domid}{}{address length}{get address and length of boardID string}
@@ -444,6 +446,7 @@ line feed character address and length to the stack}
 dom id string}
 \cmd{drop}{}{}{Drop the top stack element}
 \cmd{dup}{a}{a a}{Duplicate the top stack element}
+\cmd{enableFB}{}{}{Enable and power-up the flasherboard}
 \cmd{enableHV}{}{}{Enable PMT high-voltage base}
 \cmd{enableLED}{}{}{Enable the onboard LED}
 \cmd{exec}{execAddress execLength}{}{Execute the program at execAddress with
@@ -461,6 +464,10 @@ status = 0 if all is ok, otherwise return error code.}
 \example{ $>$ s" flasher.xsvf" find if fb-cpld endif}{Program the
 flasher board CPLD with the XSVF file named flasher.xsvf in the flash 
 filesystem}
+
+\cmd{fbid}{}{address length}{Get address and length of flasherboard ID string}
+\example{ $>$ crlf fbid type type \\ ed00000a3daa5a01}{Print the
+flasherboard ID string}
 
 \cmd{find}{nameAddress nameLength}{fileAddress fileLength status}{
         find the file with name at nameAddress of length nameLength
@@ -484,6 +491,10 @@ fpga with the sbi file named stf.sbi in the flash filesystem}
 put the resulting data in destAddress with length destLength.  if
 destLength=0 and destAddress=0 there was an error.
 }
+
+\cmd{hvid}{}{address length}{Get address and length of HV base ID string}
+\example{ $>$ crlf hvid type type \\ 00000a4478e8}{Print the
+HV base ID string}
 
 \cmd{i}{}{value of counter}{returns value of index variable in a ?DO loop.}
 \example{ $>$ 4 0 ?DO i LOOP .s \\ <4> 0 1 2 3 } { Put the numbers 0-3 on
