@@ -207,7 +207,7 @@ int flash_get_limits(void *zero, void **f_start, void **f_end) {
    if (!isInit) {
       /* FIXME: check for saved file...
        */
-      void *p = mmap(NULL, 8*1024*1024, PROT_READ|PROT_WRITE,
+      void *p = mmap((void *) 0x41000000, 8*1024*1024, PROT_READ|PROT_WRITE,
 		     MAP_SHARED|MAP_ANON, -1, 0);
       memset(p, 0xff, 8*1024*1024);
       flash_start = p;

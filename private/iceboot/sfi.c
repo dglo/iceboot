@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.70 $
+ * $Revision: 1.70.2.1 $
  * $Author: arthur $
- * $Date: 2003-07-15 18:41:09 $
+ * $Date: 2003-07-30 20:09:15 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1689,9 +1689,14 @@ int main(int argc, char *argv[]) {
 
   sourceStartup();
 
+  /* FIXME: HACK!!!  kalle will fix this in firmware,
+   * for now, we work around it...
+   */
+  halUSleep(10000);
+
   printf(" Iceboot (%s) build %s.....\r\n", STRING(PROJECT_TAG),
 	 STRING(ICESOFT_BUILD));
-
+  
   line = (char *) memalloc(linesz);
 
   if ((err=setjmp(jenv))!=0) {
