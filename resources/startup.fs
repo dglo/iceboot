@@ -43,7 +43,7 @@
 
 \
 \ run domcal
-: echo-mode s" domcal" find if exec endif ;
+: dom-cal s" domcal" find if exec endif ;
 
 \
 \ comm stuff...
