@@ -34,7 +34,9 @@
 \
 \ run domapp
 \
-: domapp s" domapp.sbi" find if fpga endif s" domapp" find if exec endif ;
+: domapp-sbi s" domapp.sbi" find if fpga endif ;
+: domapp s" domapp" find if exec endif ;
+: domapp-test domapp-sbi s" domapp-test" find if exec endif ;
 
 \
 \ run echomode

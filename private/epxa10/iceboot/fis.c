@@ -74,7 +74,6 @@ static int updateDirectory(const struct fis_image_desc *img,
    struct fis_image_desc *t = (struct fis_image_desc *) malloc(block_size);
    int err = 0;
    int stat;
-   void *err_addr;
 
    if (t==NULL) {
       printf("unable to malloc block_size %d!\r\n", block_size);
@@ -95,7 +94,7 @@ static int updateDirectory(const struct fis_image_desc *img,
    flash_unlock(fis_addr, block_size);
 
    if ((stat = flash_erase(fis_addr, block_size))) {
-      printf("Error erasing at %p: %s\r\n", err_addr, flash_errmsg(stat));
+      printf("Error erasing at %p: %s\r\n", fis_addr, flash_errmsg(stat));
       err = 1;
    }
    else {
@@ -103,7 +102,7 @@ static int updateDirectory(const struct fis_image_desc *img,
        */
       if ((stat = flash_write(fis_addr, t, block_size))) {
 	 printf("Error programming at %p: %s\r\n", 
-		err_addr, flash_errmsg(stat));
+		fis_addr, flash_errmsg(stat));
 	 err = 1;
       }
    }
@@ -167,7 +166,6 @@ int fisDelete(const char *name) {
 
 int fisUnlock(const char *name) {
    const struct fis_image_desc *img = fisLookup(name);
-   void *err_addr;
    int stat;
    
    if (img==NULL) {
@@ -176,7 +174,8 @@ int fisUnlock(const char *name) {
    }
 
    if ((stat=flash_unlock((void *)img->flash_base, img->size))) {
-      printf("Error unlocking at %p: %s\r\n", err_addr, flash_errmsg(stat));
+      printf("Error unlocking at %p: %s\r\n", 
+             (void *) img->flash_base, flash_errmsg(stat));
       return 1;
    } 
 
@@ -185,7 +184,6 @@ int fisUnlock(const char *name) {
 
 int fisLock(const char *name) {
    const struct fis_image_desc *img = fisLookup(name);
-   void *err_addr;
    int stat;
 
    if (img==NULL) {
@@ -194,7 +192,8 @@ int fisLock(const char *name) {
    }
 
    if ((stat=flash_lock((void *)img->flash_base, img->size))) {
-      printf("Error locking at %p: %s\r\n", err_addr, flash_errmsg(stat));
+      printf("Error locking at %p: %s\r\n", 
+             (void *) img->flash_base, flash_errmsg(stat));
       return 1;
    } 
 
@@ -273,7 +272,7 @@ int fisCreate(const char *name, void *addr, int len) {
    const struct fis_image_desc *img = fisLookup(name);
    int i;
    int old_size = 0;
-   void *old_base;
+   void *old_base = NULL;
    const int block_size = fisDirSize();
    const int nblocks = (len + block_size - 1) / block_size;
    const int ndirs = block_size/sizeof(*img);
