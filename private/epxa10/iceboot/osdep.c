@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 #include "iceboot/sfi.h"
 #include "booter/epxa.h"
@@ -226,78 +225,20 @@ int fpga_config(int *p, int nbytes) {
    * we should just export the fpga config routine from
    * the hal...
    */
-  {  const char *domid = halGetBoardID();
-     unsigned t;
-     int i;
+  {  unsigned long long domid = halGetBoardIDRaw();
      
      /* low 32 bits...
       */
-     for (t=0, i=0; i<8; i++) {
-	const char c = domid[11-i];
-	if (c>='0' && c<='9') t += (c - '0')<<(i*4);
-	else if (c>='a' && c<='f') t += (c - 'a' + 10)<<(i*4);
-	else if (c>='A' && c<='F') t += (c - 'A' + 10)<<(i*4);
-     }
-     *(volatile unsigned *)0x90081058 = t;
+     *(volatile unsigned *)0x90081058 = domid&0xffffffff;
 
      /* high 16 bits + ready bit...
+      *
+      * FIXME: we have to move the ready bit...
       */
-     for (t=0, i=0; i<4; i++) {
-	const char c = domid[3-i];
-	if (c>='0' && c<='9') t += (c - '0')<<(i*4);
-	else if (c>='a' && c<='f') t += (c - 'a' + 10)<<(i*4);
-	else if (c>='A' && c<='F') t += (c - 'A' + 10)<<(i*4);
-     }
-     *(volatile unsigned *)0x9008105c = t | 0x10000;
+     *(volatile unsigned *)0x9008105c = (domid>>32) | 0x10000;
   }
 
   return 0;
-}
-
-/* re-program flasher board cpld...
- *
- * returns: 0 ok, non-zero error...
- */
-int fb_cpld_config(int *p, int nbytes) {
-
-    int err;
-
-    /* Check data pointer */
-    if (p == NULL) {
-        printf("Error: file pointer argument is null!\n");
-        return 1;
-    }
-
-    /* Check xsvf file sanity */
-    /* Should start with XREPEAT, XENDDIR */
-    if (p[0] != 0x00130007) {
-        printf("Error: file doesn't appear to be a valid XSVF file.\n");
-        return 1;
-    }
-
-    /* Turn on flasherboard */
-    hal_FB_enable();
-    
-    /* Enable JTAG in PLD and FPGA */
-    hal_FPGA_TEST_FB_JTAG_enable();
-    halEnableFlasherJTAG();
-    
-    /* Execute xsvf player */
-    err = hal_FB_xsvfExecute(p, nbytes);
-    
-    if (err == 0)
-        printf("XSVF executed successfully!\n");
-    else               
-        printf("XSVF execution failed with error code %d.\n", err);
-    
-    /* Disable JTAG in PLD and FPGA  */
-    hal_FPGA_TEST_FB_JTAG_disable();
-    halDisableFlasherJTAG();
-    
-    /* Turn off flasherboard */
-    hal_FB_disable();
-    
-    return err;
 }
 
 /* wait input data

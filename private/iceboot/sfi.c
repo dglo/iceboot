@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.98.2.1 $
- * $Author: jkelley $
- * $Date: 2004-05-13 18:55:13 $
+ * $Revision: 1.103 $
+ * $Author: arthur $
+ * $Date: 2004-03-16 17:42:39 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -970,12 +970,13 @@ static const char *icopy(const char *p) {
 }
 
 static const char *enableHV(const char *p) {
-   halEnablePMT_HV();
+   halPowerUpBase();
+   halEnableBaseHV();
    return p;
 }
 
 static const char *disableHV(const char *p) {
-   halDisablePMT_HV();
+   halPowerDownBase();
    return p;
 }
 
@@ -1289,14 +1290,6 @@ static int do_fpga_config(int addr, int nbytes) {
    return fpga_config((int *) addr, nbytes);
 }
 
-/* re-program flasher board cpld...
- *
- * returns: 0 ok, non-zero error...
- */
-static int do_fb_cpld_config(int addr, int nbytes) {
-   return fb_cpld_config((int *) addr, nbytes);
-}
-
 static const char *sdup(const char *p) {
   int v = pop();
   push(v); push(v);
@@ -1507,7 +1500,6 @@ static const char *boardID(const char *p) {
 
 static const char *domID(const char *p) {
    const char *id = halGetBoardID();
-   if (strlen(id)==16) id += 4; /* skip fixed part... */
    push((int) id);
    push(strlen(id));
    return p;
@@ -1533,8 +1525,12 @@ static void prtCurrents(int rawCurrents) {
    const float *eff = (rawCurrents) ? ueff : reff;
 
    /*                     5V  3.3V 2.5V 1.8V -5V */
-   /* 1.8V and 2.5V have been swapped            */
-   const int   order[] = { 0, 1,   3,   2,    4 };
+   /* 1.8V and 2.5V have been swapped back
+    * 
+    * FIXME: this order is no longer needed, should
+    * we remove it?
+    */
+   const int   order[] = { 0, 1,   2,   3,    4 };
    int ii;
    
    /* format the currents... */
@@ -1792,52 +1788,52 @@ static const char *pldVersions(const char *p) {
    return p;
 }
 
-
 static const char *fpgaVersions(const char *p) {
-#define EXPVER(a) \
-  (expected_versions[FPGA_VERSIONS_TYPE_ICEBOOT][FPGA_VERSIONS_##a])
-
+#define EXPVER(a, b) (expected_versions[a][FPGA_VERSIONS_##b])
    /* FIXME: put the correct address in here... */
    unsigned *versions = (unsigned *) 0x90000000;
-   
+   const int type = 
+      (versions[0] <= FPGA_VERSIONS_TYPE_STF_NOCOM) ? 
+      versions[0] : FPGA_VERSIONS_TYPE_ICEBOOT;
+
    /* print out the versioning info...
     */
    printf("fpga type    %d\r\n", versions[0]);
    printf("build number %d\r\n", (versions[2]<<16) | versions[1]);
    printf("matches?     %s\r\n", 
-	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT, 
+	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT,
 				  DOM_HAL_FPGA_COMP_ALL)?"no":"yes");
    printf("versions:\r\n");
    printf("  com_fifo           %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_COM_FIFO], EXPVER(COM_FIFO));
+	  versions[FPGA_VERSIONS_COM_FIFO], EXPVER(type, COM_FIFO));
    
    printf("  com_dp             %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_COM_DP], EXPVER(COM_DP));
+	  versions[FPGA_VERSIONS_COM_DP], EXPVER(type, COM_DP));
 
    printf("  daq                %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_DAQ], EXPVER(DAQ));
+	  versions[FPGA_VERSIONS_DAQ], EXPVER(type, DAQ));
 
    printf("  pulsers            %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_PULSERS], EXPVER(PULSERS));
+	  versions[FPGA_VERSIONS_PULSERS], EXPVER(type, PULSERS));
 
    printf("  discriminator_rate %d [%d]\r\n",
 	  versions[FPGA_VERSIONS_DISCRIMINATOR_RATE], 
-	  EXPVER(DISCRIMINATOR_RATE));
+	  EXPVER(type, DISCRIMINATOR_RATE));
 
    printf("  local_coinc        %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_LOCAL_COINC], EXPVER(LOCAL_COINC));
+	  versions[FPGA_VERSIONS_LOCAL_COINC], EXPVER(type, LOCAL_COINC));
 
    printf("  flasher_board      %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_FLASHER_BOARD], EXPVER(FLASHER_BOARD));
+	  versions[FPGA_VERSIONS_FLASHER_BOARD], EXPVER(type, FLASHER_BOARD));
 
    printf("  trigger            %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_TRIGGER], EXPVER(TRIGGER));
+	  versions[FPGA_VERSIONS_TRIGGER], EXPVER(type, TRIGGER));
 
    printf("  local_clock        %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_LOCAL_CLOCK], EXPVER(LOCAL_CLOCK));
+	  versions[FPGA_VERSIONS_LOCAL_CLOCK], EXPVER(type, LOCAL_CLOCK));
 
    printf("  supernova          %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(SUPERNOVA));
+	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(type, SUPERNOVA));
 
    return p;
 }
@@ -2031,7 +2027,6 @@ int main(int argc, char *argv[]) {
     { "swap", swap },
     { "fpga", do_fpga_config },
     { "interpret", interpret },
-    { "fb-cpld", do_fb_cpld_config },
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
 

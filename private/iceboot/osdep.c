@@ -36,10 +36,6 @@ int fpga_config(int *addr, int nbytes) {
     return 0;
 }
 
-int fb_cpld_config(int *p, int nbytes) {
-    return 0;
-}
-
 /* execute an image ...
  */
 int executeImage(const void *addr, int nbytes) {
