@@ -303,7 +303,11 @@ int flash_erase(const void *from, int bytes) {
       int err = 0;
 
       for (j=0; j<sz && !err; j++) {
-	 if (block[j]!=0xffff) err = 1;
+	 if (block[j]!=0xffff) {
+	    printf("verify error, chip %d, block %d [%p], offset %d (%d)\r\n",
+		   chip, i, block, j, sz);
+	    err = 1;
+	 }
       }
       if (err) break;
    }
