@@ -1,34 +1,159 @@
-/* simple app used to interact with the
- * xp10 devel board...
+/**
+ * \mainpage Iceboot
+ * \section introduction Introduction
+ *
+ * Iceboot implements
+ * a small subset of the standard forth environment, just
+ * enough to get the devices on the board working.
+ *
+ * The up-arrow button will go back one command and
+ * the down-arrow button will go up one command.  The
+ * right and left arrow keys can be used to edit the
+ * line.
+ *
+ * \section commands Commands
+ *   \arg \b . (period) -- print top of stack
+ *   \arg \b .s -- print entire stack contents
+ *   \arg \e val \e addr \b c! -- set byte at address \e addr to \e val
+ *   \arg \e val \e addr \b w! -- set 16 bit word at address \e addr to \e val
+ *   \arg \e val \e addr \b ! -- set 32 bit word at address \e addr to \e val
+ *   \arg \e addr \b @ -- read the 32 bit word at address \e addr
+ *   \arg \e addr \b c@ -- read the byte at address \e addr
+ *   \arg \e addr \b w@ -- read the 16 bit word at address \e addr
+ *   \arg \b : -- start a function definition
+ *   \arg \e cond \b if \e code1 \e [ \b else \e code2] \b endif -- 
+ * if \e cond is true execute \e code1 otherwise execute \e code2.
+ *   \arg \e val \b constant \e name -- set value of \e name to \e val
+ *   \arg \b \ -- the rest of the line is a comment
+ *   \arg \b drop -- drop the top value of the stack
+ *   \arg \b dup -- duplicate the top value of the stack
+ *   \arg \b ymodem1k -- push address and size of a buffer retrieved from
+ * the ymodem protocol
+ *   \arg \e nbytes \b allocate -- allocate nbytes on the heap
+ *   \arg \e addr \b free -- free addr as allocated 
+ *   \arg \e from \e to \e count \b icopy -- copy count words from \e 
+ * from to \e to
+ *   \arg \e end \e start \b ?DO \e code \b LOOP -- 
+ *  execute code from \e start (inclusive) to \e end (exclusive), 
+ *  the variable \e i contains the current iteration.
+ *   \arg \e channel \e value \b writeDAC -- write \e val to dac at \e channel
+ *   \arg \e us \b usleep -- sleep \e us microseconds
+ *   \arg \e addr \e count \b od -- hex dump of \e count 
+ * words at address \e addr
+ *   \arg \b reboot -- reboot the machine
+ *   \arg \e channel \b analogMuxInput -- set analog mux input to \e channel
+ *   \arg \b readTemp -- read the temperature, value returned is coded
+ *   \arg \e code \b prtTemp -- print coded temperature
+ *   \arg \e channel \b readADC -- read the ADC counts from \e channel
+ *   \arg \e val \b not -- return bitwise not of \e val
+ *   \arg \e val1 \e val2 \b and -- return bitwise and of \e val1 and \e val2
+ *   \arg \e val1 \e val2 \b or -- return bitwise or of \e val1 and \e val2
+ *   \arg \e val1 \e val2 \b xor -- return bitwise xor of \e val1 and \e val2
+ *   \arg \e val \e shift \b lshift -- return \e val shifted left \e shift
+ *   \arg \e val \e shift \b rshift -- return \e val shifted right \e shift
+ *   \arg \e val1 \e val2 \b + -- return sum of \e val1 and \e val2
+ *   \arg \e val1 \e val2 \b - -- return difference of \e val1 and \e val2
+ *   \arg \e val1 \e val2 \b * -- return multiplication of \e val1 and \e val2
+ *   \arg \e val1 \e val2 \b / -- return division or of \e val1 and \e val2
+ *   \arg \e val1 \e val2 \b > -- return greater than of \e val1 and \e val2
+ *   \arg \e val1 \e val2 \b < -- return less than or of \e val1 and \e val2
+ *   \arg \e val1 \e val2 \b = -- return equals of \e val1 and \e val2
+ *   \arg \b swap -- swap top two stack values
+ *   \arg \e addr \e count \b fpga -- program fpga from \e count bytes at
+ * address \e addr
+ *   \arg \e addr \e count \b interpret -- interpret \e count bytes of
+ * forth code at address \e addr
+ *   \arg \b REGISTERS -- base address of excalibur registers
+ *   \arg \b CPLD  -- base address of cpld registers
+ *   \arg \b true -- value of true
+ *   \arg \b false -- value of false
+ *   \arg \b base -- address of number base
+ *   \arg \b rawCurrents -- address of flag to display raw or corrected
+ * currents
+ *   \arg \b disableCurrents -- address of flag to disable 
+ * display of board currents
+ *   \arg \b s" \e string \b" -- push addr and count of \e string
+ *  chars on the stack
+ *   \arg \e addr \e count \b type -- print contents of string at
+ *  address \e addr with \e count bytes
+ *   \arg \e addr \e count \b swicmd -- execute swi (software interrupt)
+ *   command given by string at address \e addr with \e count bytes.
+ *   \b prtRawCurrents -- print raw currents to screen.
+ *   \b prtCookedCurrents -- print efficiency corrected currents to screen.
+ *   \arg \e plln \b prtPLL -- print pll info for \e plln (1 or 2).
+ *
+ * \section notes Notes
+ *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
+ *
+ * \section bugs Bugs
+ *   display gets corrupted from time-to-time as PC doesn't always
+ * keep up with the serial port...
+ *
+ * $Revision: 1.58 $
+ * $Author: arthur $
+ * $Date: 2003-05-14 15:06:01 $
  */
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <setjmp.h>
 
-#include "stripe.h"
+#include <unistd.h>
+
+#include "zlib.h"
 #include "sfi.h"
-#include "stf/memtests.h"
+#include "iceboot/memtests.h"
+#include "hal/DOM_MB_pld.h"
+#include "hal/DOM_MB_fpga.h"
+#include "iceboot/flash.h"
+#include "iceboot/fis.h"
+#include "osdep.h"
 
 void delay(int);
 
+static const char *udelay(const char *p);
+static const char *writeDAC(const char *p);
 static void *memalloc(size_t );
-static void memfree(void *);
 static void initMemTests(void);
+static int newLine(const char *line);
 
 static int blperr = 0;
 
-static int *stack;
+static int *stack = NULL;
 static int sp = 0;
-static int stacklen = 128;
+static int stacklen = 1024;
 
-static void push(int v) { stack[sp] = v; sp++; }
-static int  pop(void) { int ret = stack[sp-1]; sp--; return ret; }
+#define HAS_REDBOOT_COMMANDS
+#undef HAS_REDBOOT_COMMANDS
 
-static void validateStack(int nentries) {
-  if (sp<nentries) {
-    printf("!!!stack underflow!!!\r\n");
-  }
+typedef enum {
+   EXC_STACK_UNDERFLOW = 1,
+   EXC_STACK_OVERFLOW = 2
+} ExceptionCodes;
+static jmp_buf jenv;
+
+void push(int v) { 
+   if (sp>=stacklen) {
+      longjmp(jenv, EXC_STACK_OVERFLOW);
+   }
+   
+   stack[sp] = v; 
+   sp++; 
+}
+
+
+int  pop(void) {
+   int ret;
+
+   if (sp<1) {
+      /* whoops! */
+      longjmp(jenv, EXC_STACK_UNDERFLOW);
+   }
+   
+   ret = stack[sp-1]; 
+   sp--; 
+   return ret; 
 }
 
 static int numberBase = 10;
@@ -58,7 +183,6 @@ static const char *pTop(const char *pt) {
 }
 
 static const char *peek8(const char *pt) {
-  validateStack(1);
   push( *(const unsigned char *)pop());
   return pt;
 }
@@ -66,22 +190,33 @@ static const char *peek8(const char *pt) {
 static const char *poke8(const char *pt) {
   unsigned char *cp;
   int value;
-  validateStack(2);
   cp = (unsigned char *) pop();
   value = pop();
   *cp = (unsigned char) value;
   return pt;
 }
 
+static const char *peek16(const char *pt) {
+  push( *(const unsigned short *)pop());
+  return pt;
+}
+
+static const char *poke16(const char *pt) {
+  unsigned short *cp;
+  int value;
+  cp = (unsigned short *) pop();
+  value = pop();
+  *cp = (unsigned short) value;
+  return pt;
+}
+
 static const char *peek32(const char *pt) {
-  validateStack(1);
   push( *(const unsigned *)pop());
   return pt;
 }
 
 static const char *poke32(const char *pt) {
   unsigned *cp;
-  validateStack(2);
   cp = (unsigned *) pop();
   *cp = (unsigned) pop();
   return pt;
@@ -90,7 +225,7 @@ static const char *poke32(const char *pt) {
 /* name buckets...
  */
 typedef enum BucketTypeEnum { 
-   CFUNC, CFUNC1, CFUNC2, CFUNC3, CFUNC4, FUNC, CONSTANT 
+   CFUNC, CFUNC0, CFUNC1, CFUNC2, CFUNC3, CFUNC4, FUNC, CONSTANT 
 } BucketType;
 
 typedef struct BucketStruct {
@@ -98,6 +233,7 @@ typedef struct BucketStruct {
   BucketType type;
   union {
     CFunc cfunc;
+    CFunc0 cfunc0;
     CFunc1 cfunc1;
     CFunc2 cfunc2;
     CFunc3 cfunc3;
@@ -122,7 +258,6 @@ static int hashName(const char *key, int len) {
 static Bucket *lookupRootBucket(const char *nm) {
   const int len = strlen(nm);
   int idx = hashName(nm, len);
-  /*printf("rootBucket: '%s' -> %d\r\n", nm, idx);*/
   return buckets + idx;
 }
 
@@ -134,7 +269,6 @@ static Bucket *lookupBucket(const char *nm) {
   
   for (bp = rbp; bp!=NULL; bp = bp->next)
     if (strcmp(bp->nm, nm)==0) {
-      /*printf("lookup: '%s'[%p]: %p\r\n", nm, bp->u.cfunc, bp);*/
       return bp;
     }
 
@@ -143,8 +277,6 @@ static Bucket *lookupBucket(const char *nm) {
 
 static Bucket *allocBucketFromRoot(const char *nm, Bucket *rbp) {
   Bucket *bp;
-
-  /*printf("allocBucketFromRoot('%s', %p)\r\n", nm, rbp);*/
 
   if (rbp->nm==NULL) { bp = rbp; }
   else {
@@ -184,6 +316,12 @@ void addCFuncBucket(const char *nm, CFunc cf) {
   bucket->u.cfunc = cf;
 }
 
+void addCFunc0Bucket(const char *nm, CFunc0 cf) {
+  Bucket *bucket = allocBucket(nm);
+  bucket->type = CFUNC0;
+  bucket->u.cfunc0 = cf;
+}
+
 void addCFunc1Bucket(const char *nm, CFunc1 cf) {
   Bucket *bucket = allocBucket(nm);
   bucket->type = CFUNC1;
@@ -220,6 +358,7 @@ void addConstantBucket(const char *nm, int constant) {
   bucket->u.constant = constant;
 }
 
+
 /* colon word, next word we save, then we copy the rest...
  */
 static const char *colon(const char *pr) {
@@ -246,6 +385,73 @@ static const char *colon(const char *pr) {
   addFuncBucket(word, func);
   return pr;
 }
+
+/* put a string on stack (addr len)...
+ */
+static const char *squote(const char *pr) {
+   char word[128];
+   int len = 0;
+   
+   while (isspace(*pr)) pr++;
+   
+   while ( *pr && *pr!='\"') {
+      word[len] = *pr;
+      pr++;
+      len++;
+   }
+   if (*pr=='\"') pr++;
+
+   word[len] = 0;
+   if (len!=0) {
+      char *addr = strdup(word);
+      push((int)addr);
+   }
+   else push(0);
+   push(len);
+
+   return pr;
+}
+
+static int loopCountValue = 0;
+static int loopCount(void) { return loopCountValue; }
+
+/* limit start ?DO code LOOP ...
+ */
+static const char *doloop(const char *pr) {
+  char word[128];
+  char line[256];
+
+  line[0] = 0;
+  while (1) {
+     int len = 0;
+
+     /* skip whitespace...
+      */
+     while (isspace(*pr)) pr++;
+
+     /* get next word...
+      */
+     while (*pr && !isspace(*pr)) { word[len] = *pr; pr++; len++; }
+     word[len] = 0;
+
+     if (len==0 || strcmp(word, "LOOP")==0) {
+	const int start = pop();
+	const int stop = pop();
+	
+	for (loopCountValue=start; loopCountValue<stop; loopCountValue++) 
+	   newLine(line);
+
+	break;
+     }
+     else {
+	if (line[0]!=0) strcat(line, " ");
+	strcat(line, word);
+     }
+  }
+
+  return pr;
+}
+
 static const char *constant(const char *pr) {
   char word[128];
   int len = 0;
@@ -265,39 +471,73 @@ static const char *constant(const char *pr) {
 }
 
 /* iffunc, find else and endif words, strip out rest 
- * and exec them...
+ * and exec them -- ifs can not be nested...
+ *
+ * cond if code [else more_code] endif
  */
 static const char *iffunc(const char *pr) {
-#if 0
-  const char *func;
-  char word[128];
-  int len = 0;
+  char ifline[128], elseline[128];
   const int val = pop();
-  const char *search[] = { "else", "endif" };
+  int iselse = 0;
   
+  ifline[0] = 0;
+  elseline[0] = 0;
+
   while (1) {
-    /* skip whitespace for...
-     */
-    while (isspace(*pr)) pr++;
-    
-    /* get next word...
-     */
-    while (*pr && !isspace(*pr)) { word[len] = *pr; pr++; len++; }
-    word[len] = 0;
-    
-    /* now find ';' or end of line...
-     */
-    for (func = pr; *pr!=';' && *pr; pr++) ;
-    if (*pr) {
-      *(char *)pr = 0;
-      pr++;
-    }
-    addFuncBucket(word, func);
+     char word[128];
+     int wlen = 0;
+     
+     /* skip whitespace
+      */
+     while (isspace(*pr)) pr++;
+     
+     /* get next word...
+      */
+     while (*pr && !isspace(*pr)) { word[wlen] = *pr; pr++; wlen++; }
+     word[wlen] = 0;
+     
+     if (strcmp(word, "else")==0) {
+	iselse = 1;
+     }
+     else if (strcmp(word, "endif")==0 || strcmp(word, ";")==0 || *pr==0) {
+	/* now we can execute proper value...
+	 */
+	break;
+     }
+     else {
+	strcat( (iselse) ? elseline : ifline, word);
+	strcat( (iselse) ? elseline : ifline, " ");
+     }
   }
-#endif
+
+  if (newLine((val) ? ifline : elseline)) {
+     printf("can't parse line: '%s'\r\n", 
+	     (val) ? ifline : elseline);
+  }
+  
   return pr;
 }
 
+#if 0
+/* do begin until loop...
+ */
+static const char *begin(const char *p) {
+   /* FIXME: skip whitespace...
+    */
+
+   /* keep getting words until we get a ';' or UNTIL...
+    */
+
+   /* execute line...
+   while (1) {
+      const int ret = getLine(line);
+      if (pop()!=0) break;
+   }
+   */
+   
+   return p;
+}
+#endif
 
 /* returns: 0 not a number, 1 number num <- number
  */
@@ -388,15 +628,16 @@ static int newLine(const char *line) {
       }
       else {
 	if (bp->type==CFUNC) line = bp->u.cfunc(line);
-	else if (bp->type>=CFUNC1 && bp->type<=CFUNC4) {
+	else if (bp->type>=CFUNC0 && bp->type<=CFUNC4) {
 	  int v[4], i;
-	  const int nitems = bp->type - CFUNC1 + 1;
-	  validateStack(nitems);
+	  const int nitems = bp->type - CFUNC0;
 	  for (i=0; i<nitems; i++) v[i] = pop();
-	  if (bp->type == CFUNC1) push(bp->u.cfunc1(v[0]));
+	  if (bp->type == CFUNC0)      push(bp->u.cfunc0());
+	  else if (bp->type == CFUNC1) push(bp->u.cfunc1(v[0]));
 	  else if (bp->type == CFUNC2) push(bp->u.cfunc2(v[1], v[0]));
 	  else if (bp->type == CFUNC3) push(bp->u.cfunc3(v[2], v[1], v[0]));
-	  else if (bp->type == CFUNC4) push(bp->u.cfunc4(v[3], v[2], v[1], v[0]));
+	  else if (bp->type == CFUNC4) 
+	     push(bp->u.cfunc4(v[3], v[2], v[1], v[0]));
 	}
 	else if (bp->type==FUNC) newLine(bp->u.func);
 	else if (bp->type==CONSTANT) push(bp->u.constant);
@@ -419,6 +660,7 @@ static int and(int v1, int v2) { return v1&v2; }
 static int xor(int v1, int v2) { return v1^v2; }
 static int shr(int v1, int v2) { return ((unsigned) v1) >> v2; }
 static int shl(int v1, int v2) { return v1 << v2; }
+static int not(int v) { return ~v; }
 
 /* print out list of words on word stack
  *
@@ -456,6 +698,90 @@ static const char *comment(const char *p) {
 static const char *drop(const char *p) {
   pop();
   return p;
+}
+
+static const char *memallocate(const char *p) {
+   void *ptr = malloc(pop());
+   push((int)ptr);
+   push((ptr==NULL) ? 1 : 0);
+   return p;
+}
+
+static const char *memfree(const char *p) {
+   free((void *)pop());
+   push(0);
+   return p;
+}
+
+static const char *type(const char *p) {
+   const int len = pop();
+   const char *addr = (const char *) pop();
+   write(1, addr, len);
+   return p;
+}
+
+static const char *rcvMsg(const char *p) {
+   char *msg = (char *) malloc(4096);
+   char *tmp = NULL;
+   int type, len;
+   int ret = hal_FPGA_TEST_receive(&type, &len, msg);
+
+   if (ret) {
+      printf("rcv: unable to receive msg!\r\n");
+      return p;
+   }
+   
+   if (len>0) {
+      tmp = (char *) malloc(len);
+      memcpy(tmp, msg, len);
+   }
+
+   push(type);
+   push((int)tmp);
+   push(len);
+
+   free(msg);
+   return p;
+}
+
+static const char *sendMsg(const char *p) {
+   const int len = pop();
+   const char *addr = (const char *) pop();
+   const int type = pop();
+   
+   if (hal_FPGA_TEST_send(type, len, addr)) {
+      printf("send: unable to send msg!\r\n");
+   }
+
+   return p;
+}
+
+static int readDAC(int channel) { return halReadDAC(channel); }
+static int readADC(int adc) { return halReadADC(adc); }
+static int readBaseADC(void) { return halReadBaseADC(); }
+
+/* copy integers from one location to another...
+ * 
+ * from to n
+ */
+static const char *icopy(const char *p) {
+   const int n = pop();
+   int *to = (int *)pop();
+   const int *from = (int *) pop();
+   int i;
+   
+   for (i=0; i<n; i++) to[i] = from[i];
+   return p;
+}
+
+static const char *enableHV(const char *p) {
+   halEnablePMT_HV();
+   return p;
+}
+
+static const char *disableHV(const char *p) {
+   halDisablePMT_HV();
+   return p;
 }
 
 /* crctab calculated by Mark G. Mendel, Network Systems Corporation */
@@ -507,29 +833,34 @@ static unsigned short crctab[256] = {
  */
 #define updcrc(cp, crc) ( crctab[((crc >> 8) & 255)] ^ (crc << 8) ^ cp)
 
+/* check for serial data...
+ */
 static const char *ymodem1k(const char *p) {
   const int bllen = 1024+2;
   unsigned char *block = (unsigned char *) memalloc(bllen);
   int blp = 0;
-  extern volatile int tx_head,tx_tail,rx_head,rx_tail;
-  int i, cnt, firstblock = 1, blocknum, ndatabytes = 0;
+  int i, firstblock = 1, blocknum, ndatabytes = 0;
   unsigned char ack = 0x06;
   int crc = 1;
   char *addr = NULL;
   unsigned char nak = 'C'; /* 0x15;*/
-  int firstEOT = 1;
   int filelen;
 
   /* continuously write 'C' until we get a packet...
    */
-  for (i=0; i<20; i++) {
-    int count = 10000000;
+  for (i=0; i<200; i++) {
+     int j;
+     
+     write(1, &nak, 1);
 
-    write(1, &nak, 1);
-    while (rx_head==rx_tail && count>=0 ) count--;
-    if (rx_head!=rx_tail) break;
+     for (j=0; j<5000; j++) {
+	halUSleep(100);
+	if (isInputData()) break;
+     }
+
+     if (isInputData()) break;
   }
-
+  
   /* read packet loop...
    */
   while (1) {
@@ -566,6 +897,9 @@ static const char *ymodem1k(const char *p) {
       continue;
     }
     else {
+       printf("ymodem1k: unexpected character: 0x%02x [%c]\r\n", 
+	      pkt, pkt);
+
       blperr = pkt&0xff;
       push(0); push(0);
       return p;
@@ -681,135 +1015,553 @@ static const char *ymodem1k(const char *p) {
     blocknum++;
   }
 
-  push(ndatabytes);
   push((int) addr);
+  push(ndatabytes);
   return p;
+}
+
+static const char *invalidateICache(const char *p) {
+   icacheInvalidateAll();
+   return p;
+}
+
+/* exec a binary image.  the image is to be loaded at
+ * 0x00400000 (4M) and executed from there...
+ */
+static const char *execBin(const char *p) {
+   int nbytes = pop();
+   const void *addr = (void *)pop();
+   executeImage(addr, nbytes);
+   return p;
+}
+
+/* use buffer as interpreted input...
+ *
+ * ignore '\r', new lines every '\n'...
+ */
+static int interpret(int addr, int nbytes) {
+   const char *buf = (const char *) addr;
+   char line[256];
+   int i = 0;
+   int lineno = 1;
+   int len = 0;
+      
+   while (i<nbytes) {
+      if (buf[i]=='\n') {
+	 int status;
+	 
+	 line[len] = 0;
+	 if ((status=newLine(line))) {
+	    printf("parse error, line: %d\r\n", lineno);
+	    return status;
+	 }
+	 lineno++;
+	 len = 0;
+      }
+      else if (buf[i]!='\r') {
+	 line[len] = buf[i];
+	 len++;
+      }
+      i++;
+   }
+   
+   if (len>0) {
+      int status;
+      
+      line[len] = 0;
+      if ((status=newLine(line))) {
+	 printf("parse error, (final) line: %d\r\n", lineno);
+	 return status;
+      }
+   }
+   
+   return 0;
 }
 
 /* re-program fpga...
  *
  * returns: 0 ok, non-zero error...
  */
-static int fpga_config(int nbytes, int addr) {
-  int *p =  (int *) addr;
-  int *cclk = (int *) (EXC_REGISTERS_BASE + 0x144);
-  int *ccntl = (int *) (EXC_REGISTERS_BASE + 0x140);
-  int *idcode = (int *) (EXC_REGISTERS_BASE + 0x8);
-  int *cdata = (int *) (EXC_REGISTERS_BASE + 0x148);
-  int i;
-
-  /* check magic number...
-   */
-  if (p[0] != 0x00494253) {
-    printf("invalid magic number...\n");
-    return 4;
-  }
-
-  /* check buffer length */
-  if ((nbytes%4) != 0 || nbytes<p[2]+p[3]) {
-    printf("invalid buffer length\n");
-    return 1;
-  }
-
-  /* check file length */
-  if ((p[3]%4)!=0 || (p[2]%4)!=0) {
-    printf("invalid file length/offset\n");
-    return 1;
-  }
-
-  /* setup clock */
-  *cclk = 4;
-
-  /* check lock bit of ccntl */
-  if ( (*(volatile int *)ccntl)&1 ) {
-    int *cul = (int *) (EXC_REGISTERS_BASE + 0x14c);
-    *(volatile int *) cul = 0x554e4c4b;
-    
-    if ((*(volatile int *)ccntl)&1 ) {
-      printf("can't unlock config_control!\n");
-      return 1;
-    }
-  }
-
-  /* check idcode */
-  if (*idcode!=p[1]) {
-    printf("idcodes do not match\n");
-    return 2;
-  }
-
-  /* set CO */
-  *(volatile int *) ccntl = 2;
-
-  /* write data... */
-  for (i=(p[2]/4); i<(p[2]+p[3])/4; i++) {
-    /* write next word */
-    *(volatile int *) cdata = p[i];
-
-    /* wait for busy bit... */
-    while ( (*(volatile int *)ccntl)&4) {
-      /* check for an error...
-       */
-      if ( (*(volatile int *) ccntl)&0x10) {
-	printf("config programming error!\n");
-	return 10;
-      }
-    }
-  }
-
-  /* wait for CO bit to clear...
-   */
-  while ((*(volatile int *) ccntl)&0x2) {
-    if ( (*(volatile int *) ccntl)&0x10) {
-      printf("config programming error (waiting for CO)!\n");
-      return 10;
-    }
-  }
-  
-  return 0;
+static int do_fpga_config(int addr, int nbytes) {
+   return fpga_config((int *) addr, nbytes);
 }
 
-static const char *dup(const char *p) {
+static const char *sdup(const char *p) {
   int v = pop();
   push(v); push(v);
   return p;
 }
 
-#if 0
-static const char *dosetupSDRAM(const char *p) {
-  extern void setupSDRAM(void);
-  setupSDRAM();
-  return p;
+/* dump memory at address count
+ */
+static const char *odump(const char *p) {
+   const int cnt = pop();
+   unsigned *addr = (unsigned *) pop();
+   int i;
+   
+   for (i=0; i<cnt; i+=4, addr+=4) {
+      printf("%08x %08x ", (unsigned) addr, addr[0]);
+      if (i<cnt-1) printf("%08x ", addr[1]);
+      if (i<cnt-2) printf("%08x ", addr[2]);
+      if (i<cnt-3) printf("%08x ", addr[3]);
+      printf("\r\n");
+   }
+   return p;
+}
+
+static const char *reboot(const char *p) {
+   halBoardReboot();
+   return p;
+}
+
+static const char *writePassiveBaseDAC(const char *p) {
+   int value = pop();
+   halWritePassiveBaseDAC(value);
+   return p;
+}
+
+static const char *writeActiveBaseDAC(const char *p) {
+   int value = pop();
+   halWriteActiveBaseDAC(value);
+   return p;
+}
+
+static int readBaseDAC(void) { return halReadBaseDAC(); }
+
+static const char *analogMuxInput(const char *p) {
+   const int chan = pop();
+   halSelectAnalogMuxInput(chan);
+   return p;
+}
+
+static int readTemp(void) { return halReadTemp(); }
+
+static float formatTemp(int temp) {
+   signed char t = (temp>>8);
+   float v = t;
+   int i;
+   int mask = 0x80;
+   for (i=0; i<4; i++, mask>>=1) {
+      const float frac = 1.0 / (1<<(i+1));
+      if (temp&mask) v+=frac;
+   }
+   return v;
+}
+
+static const char *prtTemp(const char *p) {
+   const int temp = pop();
+   printf("temperature: %.2f degrees C\r\n", formatTemp(temp));
+   return p;
+}
+
+static const char *crlf(const char *p) { 
+   static const char *crlf = "\r\n";
+   push((int) crlf);
+   push(2);
+   return p;
+}
+
+static const char *swicmd(const char *p) {
+   const int len = pop();
+   const char *addr = (const char *)pop();
+   write(0x1000, addr, len);
+   return p;
+}
+
+/* pop string off stack, make it into a C string...
+ */
+static const char *mkString(void) {
+   const int len = pop();
+   const char *addr = (const char *)pop();
+   char *ret = malloc(len+1);
+   memcpy(ret, addr, len);
+   ret[len] = 0;
+   return ret;
+}
+
+static const char *boardID(const char *p) {
+   const char *id = halGetBoardID();
+   push((int) id);
+   push(strlen(id));
+   return p;
+}
+
+#if defined(HAS_REDBOOT_COMMANDS)
+/* call out to an iceboot command...
+ */
+static const char *iceboot(const char *p) {
+   /* copy command locally...
+    */
+   char *command = strdup(p);
+   char *csave = command;
+   char **argv = (char **)calloc(MAX_ARGV, sizeof(char *));
+
+#if defined(HAS_REDBOOT_COMMANDS)
+   int argc;
+   struct cmd *cmd;
+
+   if ((cmd = parse(&command, &argc, argv)) != NULL) {
+      cmd->fun(argc, argv);
+   }
+   else {
+      printf("can't find redboot command: '%s'\r\n", p);
+   }
+#else
+   printf("redboot commands disabled...\r\n");
+#endif
+
+   free(csave);
+   free(argv);
+   return p + strlen(p);
 }
 #endif
+
+static void prtCurrents(int rawCurrents) {
+   float currents[5];
+   /* volts per count */
+   const float vpc = 2.5/4095.0;
+   /* voltages */
+   const float volts[] = { 5, 3.3, 2.5, 1.8, -5 };
+   /*                     5V  3.3V 2.5V 1.8V -5V */
+   const float gain[] = { 100, 100, 100, 100, 100 };
+   const float reff[] = { 1,   0.98, 0.80, 0.96, 1 };
+   const float ueff[] = { 1,     1,    1, 1,   1 };
+   const float *eff = (rawCurrents) ? ueff : reff;
+   int ii;
+   
+   /* format the currents... */
+   for (ii=0; ii<5; ii++) {
+      currents[ii] = 
+	 eff[ii]*(5/volts[ii])*((readADC(3+ii) * vpc)/gain[ii])*10;
+   }
+	  
+   /* write the string... */
+   printf("  5V %.3fA, 3.3V %.3fA, "
+	  "2.5V %.3fA, 1.8V %.3fA, -5V %.3fA, %.1f (C)",
+	  currents[0], currents[1],
+	  currents[2], currents[3], currents[4],
+	  formatTemp(readTemp()));
+}
+
+static const char *prtRawCurrents(const char *p) {
+   prtCurrents(1);
+   printf("\r\n");
+   return p;
+}
+
+static const char *prtCookedCurrents(const char *p) {
+   prtCurrents(0);
+   printf("\r\n");
+   return p;
+}
+
+static const char *doFisList(const char *p) {
+   fisList();
+   return p;
+}
+
+static const char *doFisCreate(const char *p) {
+   char *s = (char *) mkString();
+   int len = pop();
+   void *addr = (void *) pop();
+   fisCreate(s, addr, len);
+   return p;
+}
+
+static const char *doFisInit(const char *p) {
+   fisInit();
+   return p;
+}
+
+
+static const char *doFisRm(const char *p) {
+   char *s = (char *) mkString();
+   push(fisDelete(s)==0 ? 1 : 0);
+   free(s);
+   return p;
+}
+
+static const char *doFisUnlock(const char *p) {
+   char *s = (char *) mkString();
+   push(fisUnlock(s)==0 ? 1 : 0);
+   free(s);
+   return p;
+}
+
+
+static const char *doFisLock(const char *p) {
+   char *s = (char *) mkString();
+   push(fisLock(s)==0 ? 1 : 0);
+   free(s);
+   return p;
+}
+
+/* find string given...
+ *
+ * if file exists push(length), push(addr)
+ * push existence:
+ *   true file exists
+ *   false file doesn't exist
+ */
+static const char *find(const char *p) {
+   char *s = (char *) mkString();
+   const struct fis_image_desc *img = fisLookup(s);
+
+   if (img==NULL) {
+      push(0);
+   }
+   else {
+      push((int) img->flash_base);
+      push(img->data_length);
+      push(1);
+   }
+   free(s);
+   return p;
+}
+
+/* search for and source startup.fs if it exists...
+ */
+static void sourceStartup(void) {
+   const struct fis_image_desc *img = fisLookup("startup.fs");
+   if (img==NULL) return;
+   interpret((int) img->flash_base, img->data_length);
+}
+
+/* length address on stack (dropped)
+ * length address pushed on stack...
+ */
+static const char *zcompress(const char *p) {
+   const Bytef *src = (const Byte *) pop();
+   uLong srcLen = pop();
+   Bytef *dest = (Bytef *)malloc(12 + (int) (1.011*srcLen));
+   uLongf destLen;
+
+   compress(dest, &destLen, src, srcLen);
+
+   if (destLen>0) {
+      Bytef *ret = (Bytef *) malloc(destLen);
+      /* FIXME: prepend header..
+       */
+      memcpy(ret, dest, destLen);
+
+      /* FIXME: append crc32, isize...
+       */
+      push(destLen);
+      push((int) ret);
+   }
+   else {
+      push(0);
+      push(0);
+   }
+   free(dest);
+   return p;
+}
+
+static int uncomp(Bytef *dest, uLongf *destLen, 
+		  const Bytef *source, uLong sourceLen) {
+    z_stream stream;
+    int err;
+
+    stream.next_in = (Bytef*)source;
+    stream.avail_in = (uInt)sourceLen;
+    /* Check for source > 64K on 16-bit machine: */
+    if ((uLong)stream.avail_in != sourceLen) return Z_BUF_ERROR;
+
+    stream.next_out = dest;
+    stream.avail_out = (uInt)*destLen;
+    if ((uLong)stream.avail_out != *destLen) return Z_BUF_ERROR;
+
+    stream.zalloc = (alloc_func)0;
+    stream.zfree = (free_func)0;
+
+    /* send -MAX_WBITS to indicate no zlib header...
+     */
+    err = inflateInit2(&stream, -MAX_WBITS);
+    if (err != Z_OK) return err;
+    
+    err = inflate(&stream, Z_FINISH);
+    if (err != Z_STREAM_END) {
+        inflateEnd(&stream);
+        return err == Z_OK ? Z_BUF_ERROR : err;
+    }
+    *destLen = stream.total_out;
+
+    err = inflateEnd(&stream);
+    return err;
+}
+
+
+/* length address on stack (dropped)...
+ * length address status pushed on stack...
+ */
+static const char *gunzip(const char *p) {
+   uLong srcLen = pop();
+   const Bytef *src = (const Byte *) pop();
+
+   /* uncompress a gzip file...
+    */
+   if (src[0]==0x1f && src[1]==0x8b && src[2]==8) {
+      Bytef *dest;
+      uLongf destLen;
+      int idx = 10, dl;
+      int ret;
+      
+      if (src[3]&0x04) {
+	 int xlen = src[10] + (((int)src[11])<<8);
+	 idx += xlen + 2;
+      }
+      
+      if (src[3]&0x08) {
+	 while (src[idx]!=0) idx++;
+	 idx++;
+      }
+      
+      if (src[3]&0x10) {
+	 while (src[idx]!=0) idx++;
+	 idx++;
+      }
+
+      if (src[3]&0x02) {
+	 idx+=2;
+      }
+
+      /* header is now stripped...
+       */
+      dl = 
+	 (int) src[srcLen-4] +
+	 ((int) src[srcLen-3]<<8) + 
+	 ((int) src[srcLen-2]<<16) +
+	 ((int) src[srcLen-1]<<24);
+      
+      dest = (Bytef *) malloc(dl);
+      destLen = dl;
+      ret = uncomp(dest, &destLen, src + idx, srcLen - idx - 8);
+
+      if (ret==Z_OK && destLen==dl) {
+	 push((int)dest);
+	 push(dl);
+      }
+      else {
+	 printf("gunzip: error uncompressing: %d %lu %d\r\n",
+		ret, destLen, dl);
+	 free(dest);
+	 push(0);
+	 push(0);
+      }
+   }
+   else {
+      printf("gunzip: invalid file header...\r\n");
+      push(0);
+      push(0);
+   }
+
+   return p;
+}
+
 
 int main(int argc, char *argv[]) {
   char *line;
   const int linesz = 256;
+  static int rawCurrents = 1;
+  static int disableCurrents = 1;
+
   static struct {
     const char *nm;
     CFunc cf;
   } initCFuncs[] = {
-    { ".", pTop },
-    { ".s", pStack },
-    { "c!", poke8 },
-    { "!", poke32 },
-    { "@", peek32 },
-    { "c@", peek8 },
-    { ":", colon },
-    { "if", iffunc },
-    { "words", words },
-    { "constant", constant },
-    { "\\", comment },
-    { "drop", drop },
-    { "dup", dup },
-    { "ymodem1k", ymodem1k },
-    /*    { "setupSDRAM", dosetupSDRAM },*/
+     /* don't forget to document these commands
+      * at the top of this file!
+      */
+     { ".", pTop },
+     { ".s", pStack },
+     { "c!", poke8 },
+     { "w!", poke16 },
+     { "!", poke32 },
+     { "c@", peek8 },
+     { "w@", peek16 },
+     { "@", peek32 },
+     { ":", colon },
+     { "if", iffunc },
+     { "words", words },
+     { "constant", constant },
+     { "\\", comment },
+     { "drop", drop },
+     { "dup", sdup },
+     { "ymodem1k", ymodem1k },
+     { "allocate", memallocate },
+     { "free", memfree },
+     { "icopy", icopy },
+     { "?DO", doloop },
+     { "writeDAC", writeDAC },
+     { "usleep", udelay },
+     { "od", odump },
+     { "reboot", reboot },
+     { "analogMuxInput", analogMuxInput },
+     { "prtTemp", prtTemp },
+     { "swicmd", swicmd },
+     { "s\"", squote },
+     { "type", type },
+     { "crlf", crlf },
+     { "domid", boardID },
+#if defined(HAS_REDBOOT_COMMANDS)
+     { "iceboot", iceboot },
+#endif
+     { "prtRawCurrents", prtRawCurrents },
+     { "prtCookedCurrents", prtCookedCurrents },
+     { "invalidateICache", invalidateICache },
+     { "exec", execBin },
+     { "find", find },
+     { "compress", zcompress },
+     { "gunzip", gunzip },
+     { "ls",  doFisList },
+     { "rm", doFisRm },
+     { "lock", doFisLock },
+     { "unlock", doFisUnlock },
+     { "init", doFisInit },
+     { "create", doFisCreate },
+     { "writeActiveBaseDAC", writeActiveBaseDAC },
+     { "writePassiveBaseDAC", writePassiveBaseDAC },
+     { "rcv", rcvMsg },
+     { "send", sendMsg },
+     { "enableHV", enableHV },
+     { "disableHV", disableHV },
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
+
+  static struct {
+     const char *nm;
+     CFunc0 cf;
+  } initCFuncs0[] = {
+     /* don't forget to document these commands
+      * at the top of this file!
+      */
+     { "readTemp", readTemp },
+     { "i", loopCount },
+     { "readBaseDAC", readBaseDAC },
+     { "readBaseADC", readBaseADC },
+  };
+  const int nInitCFuncs0 = sizeof(initCFuncs0)/sizeof(initCFuncs0[0]);
+
+  static struct {
+     const char *nm;
+     CFunc1 cf;
+  } initCFuncs1[] = {
+     /* don't forget to document these commands
+      * at the top of this file!
+      */
+     { "readADC", readADC },
+     { "readDAC", readDAC },
+     { "not", not },
+  };
+  const int nInitCFuncs1 = sizeof(initCFuncs1)/sizeof(initCFuncs1[0]);
+
   static struct {
     const char *nm;
     CFunc2 cf;
   } initCFuncs2[] = {
+     /* don't forget to document these commands
+      * at the top of this file!
+      */
     { "and", and },
     { "or", or },
     { "xor", xor },
@@ -823,27 +1575,50 @@ int main(int argc, char *argv[]) {
     { "<", less },
     { "=", equals },
     { "swap", swap },
-    { "fpga", fpga_config },
+    { "fpga", do_fpga_config },
+    { "interpret", interpret },
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
+
+#if 0
+  static struct {
+    const char *nm;
+    CFunc3 cf;
+  } initCFuncs3[] = {
+     /* don't forget to document these commands
+      * at the top of this file!
+      */
+    { "flashBurn", flashBurn },
+  };
+  const int nInitCFuncs3 = sizeof(initCFuncs3)/sizeof(initCFuncs3[0]);
+#endif
 
   static struct {
     const char *nm;
     int constant;
   } initConstants[] = {
-    { "LEDS", EXC_PLD_BLOCK0_BASE },
-    { "BASE", EXC_REGISTERS_BASE },
-    { "SDRAM", 0x10000000 },
-    { "true", -1 },
-    { "false", 0 },
-    { "base", (int) &numberBase },
-    { "blperr", (int) &blperr },
+     /* don't forget to document these commands
+      * at the top of this file!
+      */
+     { "true", -1 },
+     { "false", 0 },
+     { "base", (int) &numberBase },
+     { "blperr", (int) &blperr },
+     { "rawCurrents", (int) &rawCurrents },
+     { "disableCurrents", (int) &disableCurrents },
   };
   const int nInitConstants = sizeof(initConstants)/sizeof(initConstants[0]);
-  int li = 0, done = 0, i;
-  extern void initMemTests(void);
-  extern int end;
 
+  int li = 0, ei = 0, done = 0, i;
+  extern void initMemTests(void);
+  char *lines[32];
+  int hl = 0, bl = -1;
+  const int nl = sizeof(lines)/sizeof(lines[0]);
+  int escaped = 0;
+  int err;
+
+  osInit(argc, argv);
+ 
   if ((stack = (int *) memalloc(sizeof(int) * stacklen))==NULL) {
     printf("can't allocate stack...\n");
     return 1;
@@ -859,82 +1634,313 @@ int main(int argc, char *argv[]) {
   for (i=0; i<nInitCFuncs; i++) 
     addCFuncBucket(initCFuncs[i].nm, initCFuncs[i].cf);
 
+  for (i=0; i<nInitCFuncs0; i++)
+     addCFunc0Bucket(initCFuncs0[i].nm, initCFuncs0[i].cf);
+  
+  for (i=0; i<nInitCFuncs1; i++)
+     addCFunc1Bucket(initCFuncs1[i].nm, initCFuncs1[i].cf);
+  
   for (i=0; i<nInitCFuncs2; i++) 
     addCFunc2Bucket(initCFuncs2[i].nm, initCFuncs2[i].cf);
+
+#if 0
+  for (i=0; i<nInitCFuncs3; i++) 
+    addCFunc3Bucket(initCFuncs3[i].nm, initCFuncs3[i].cf);
+#endif
 
   for (i=0; i<nInitConstants; i++) 
     addConstantBucket(initConstants[i].nm, initConstants[i].constant);
 
   initMemTests();
 
+#if defined(HAS_REDBOOT_COMMANDS)
+  cmds_init();
+#endif  
+
+  sourceStartup();
+
   printf("--------\r\n");
   printf("Ready...\r\n");
 
   line = (char *) memalloc(linesz);
 
+  if ((err=setjmp(jenv))!=0) {
+     if (err==EXC_STACK_UNDERFLOW) {
+	printf("Error: stack underflow\r\n");
+     }
+     else if (err==EXC_STACK_OVERFLOW) {
+	printf("Error: stack overflow\r\n");
+     }
+     else {
+	printf("Error: unknown!\r\n");
+     }
+
+     /* reset parsed line... */
+     escaped = 0;
+     ei = 0;
+     li = 0;
+  }
+
   write(1, "\r\n> ", 4);
   while (!done) {
-    int nr, i;
-    
-    if (li==linesz) {
+    int nr;
+    char c;
+
+    if (ei==linesz) {
       printf("!!!! line too long!!!\r\n");
       break;
     }
 
-    nr = read(0, line + li, linesz - li);
-
-    if (nr<=0) {
-      printf("!!!! can't read from stdin!!!!\r\n");
-      break;
-    }
-
-    for (i=li; i<li+nr; i++) {
-      /* echo the character back...
-       */
-      if (line[i]=='\r') continue;
-
-      /* FIXME: deal with backspace here...
-       */
-      write(1, line+i, 1);
-    }
-
-    /* check for new line and call callback if found...
+    /* check for input, if there is none some
+     * amount of time (500ms?) then update the currents
+     * on the top bar...
      */
-    li += nr;
-    for (i=0; i<li; i++) {
-      /* look for '\r'
-       */
-      if (line[i]=='\r') {
-	int j, k;
+    if (!disableCurrents) {
+       while (1) {
+	  int ii;
+	  
+	  for (ii=0; ii<500; ii++) {
+	     halUSleep(1000);
+	     if (isInputData()) break;
+	  }
+	  
+	  /* jump out if there is data... */
+	  if (isInputData()) break;
+	  
+	  /* save the current cursor location, set reverse video, cursor
+	   * to upper-left... */
+	  printf("%c7%c[7m%c[H", 27, 27, 27);
+	  
+	  /* write the string... */
+	  if (!isInputData()) prtCurrents(rawCurrents);
+	  
+	  /* set normal video, reset the current cursor location */
+	  printf("%c[m%c8", 27, 27); fflush(stdout);
+       }
+    }
+    
+    /* read the next value...
+     */
+    nr = read(0, &c, 1);
+    
+    if (nr<=0) {
+       printf("!!!! can't read from stdin!!!!\r\n");
+       continue;
+    }
 
-	write(1, "\r\n", 2);
-	line[i] = 0;
-	if (newLine(line)) {
-	  printf("!!! error new line\r\n");
-	  done = 1;
-	  break;
-	}
-	for (k=0, j=i+1; j<li; j++, k++) line[k] = line[j];
-	li = k;
+#if 0
+    if (nr==1) {
+       printf("\r\n[%d] 0x%02x\r\n", escaped, c);
+    }
+#endif
+    
+    
+    if (escaped) {
+       char mv[8];
+       int lineflip = 0;
+       
+       if (c=='A') {
+	  /* up arrow... */
+	  if (bl<hl-1 && bl<nl) {
+	     bl++;
+	     lineflip = 1;
+	  }
+       }
+       else if (c=='B') {
+	  /* down... */
+	  if (bl>0) {
+	     bl--;
+	     lineflip = 1;
+	  }
+       }
+       else if (c=='C') {
+	  /* right... */
+	  if (li<ei) {
+	     sprintf(mv, "%c[C", 27);
+	     write(1, mv, strlen(mv));
+	     li++;
+	  }
+       }
+       else if (c=='D') {
+	  /* left... */
+	  if (li>0) {
+	     sprintf(mv, "%c[D", 27);
+	     write(1, mv, strlen(mv));
+	     li--;
+	  }
+       }
+       else if (c=='O') {
+	  escaped = 1;
+	  continue;
+       }
+       else if (c=='[') {
+	  escaped = 1;
+	  continue;
+       }
 
-	/* echo new line...
-	 */
-	write(1, "> ", 2);
-      }
+       if (lineflip) {
+	  const int idx = (hl - bl - 1)%nl;
+	  char cmd[8];
+
+	  /* move to beginning of line...
+	   */
+	  sprintf(cmd, "%c[D", 27);
+	  while (li>0) {
+	     write(1, cmd, strlen(cmd));
+	     li--;
+	  }
+
+	  /* clear to end of line
+	   */
+	  sprintf(cmd, "%c[K", 27);
+	  write(1, cmd, strlen(cmd));
+
+	  /* add the line...
+	   */
+	  strcpy(line, lines[idx]);
+	  li = strlen(line);
+	  ei = strlen(line);
+
+	  /* write the line...
+	   */
+	  write(1, line, strlen(line));
+       }
+       
+       escaped = 0;
+       continue;
+    }
+    
+    if (c==27) { 
+       /* esc character...
+	*/
+       escaped = 1;
+    }
+    else if (c==0x06) {
+       int snw = 0;
+       char mv[16];
+       
+       /* ^F forward word: skip whitespace until non-whitespace skip
+        * non whitespace until space or end of line
+        */
+       while (1) {
+	  if (li<ei) {
+	     if (!snw) snw = !isspace(line[li]);
+	     sprintf(mv, "%c[C", 27);
+	     write(1, mv, strlen(mv));
+	     li++;
+
+	     if (snw && li<ei && isspace(line[li])) break;
+	  }
+	  else break;
+       }
+    }
+    else if (c==0x02) {
+       int snw = 0;
+       char mv[16];
+       
+       /* ^B back word: skip whitespace backwards, 
+	* skip non-whitespace backwards until whitespace 
+	* is previous
+	*/
+       while (1) {
+	  if (li>0) {
+	     sprintf(mv, "%c[D", 27);
+	     write(1, mv, strlen(mv));
+	     li--;
+
+	     if (!snw) snw = !isspace(line[li]);
+
+	     if (snw && li>0 && isspace(line[li-1])) break;
+	  }
+	  else break;
+       }
+    }
+    else if (c=='\b' || c==0x7f) {
+       if (li>0) {
+	  char cmd[8];
+	  sprintf(cmd, "%c%c[K", '\b', 27);
+	  write(1, cmd, strlen(cmd));
+
+	  if (li<ei) {
+	     /* we need to write the rest...
+	      */
+	     sprintf(cmd, "%c7", 27);
+	     write(1, cmd, 2);
+	     write(1, line+li, (ei-li));
+	     sprintf(cmd, "%c8", 27);
+	     write(1, cmd, 2);
+	  
+	     memmove(line+li-1, line+li, ei-li);
+	  }
+	  li--;
+	  ei--;
+       }
+    }
+    else if (c=='\r') {
+       write(1, "\r\n", 2);
+       line[ei] = 0;
+       
+       /* before we parse the line, we save it in a ring buffer...
+	*/
+       if (ei>0) {
+	  if (hl>=nl) free(lines[hl%nl]);
+       
+	  lines[hl%nl] = strdup(line);
+	  hl++;
+       
+	  if (newLine(line)) {
+	     printf("!!! error new line\r\n");
+	     done = 1;
+	     break;
+	  }
+       }
+       
+       bl = -1;
+       li = ei = 0;
+       
+       /* echo new line...
+	*/
+       write(1, "> ", 2);
+    }
+    else {
+       /* make space for character...
+	*/
+       if (li<ei) memmove(line+li+1, line+li, ei-li);
+       
+       /* insert character...
+	*/
+       line[li] = c;
+
+       /* echo character...
+	*/
+       write(1, &c, 1);
+
+       ei++;
+       li++;
+
+       if (li<ei) {
+	  char ec[4];
+	  
+	  /* we need to write the rest...
+	   */
+	  sprintf(ec, "%c7", 27);
+	  write(1, ec, 2);
+	  write(1, line+li, (ei-li));
+	  sprintf(ec, "%c8", 27);
+	  write(1, ec, 2);
+       }
     }
   }
 
   return 0;
 }
 
-void delay(int time)
-{
-  int i;
-  for(i = 0; i < time; i++);
+static const char *udelay(const char *p) {
+   halUSleep(pop());
+   return p;
 }
 
 void *memalloc(size_t sz) { return malloc(sz); }
-void memfree(void *ptr) { free(ptr); }
 
 static void initMemTests(void) {
   addConstantBucket("memtest-silent", (int) &silent_test);
@@ -945,12 +1951,30 @@ static void initMemTests(void) {
   addCFunc3Bucket("memtest-div-comparison", (CFunc3) test_div_comparison);
   addCFunc3Bucket("memtest-or-comparison", (CFunc3) test_or_comparison);
   addCFunc3Bucket("memtest-and-comparison", (CFunc3) test_and_comparison);
-  addCFunc3Bucket("memtest-seqinc-comparison", (CFunc3) test_seqinc_comparison);
-  addCFunc3Bucket("memtest-solidbits-comparison", (CFunc3) test_solidbits_comparison);
-  addCFunc3Bucket("memtest-checkerboard-comparison", (CFunc3) test_checkerboard_comparison);
-  addCFunc3Bucket("memtest-blockseq-comparison", (CFunc3) test_blockseq_comparison);
-  addCFunc3Bucket("memtest-walkbits-comparison", (CFunc3) test_walkbits_comparison);
-  addCFunc3Bucket("memtest-bitspread-comparison", (CFunc3) test_bitspread_comparison);
-  addCFunc3Bucket("memtest-bitflip-comparison", (CFunc3) test_bitflip_comparison);
+  addCFunc3Bucket("memtest-seqinc-comparison", 
+		  (CFunc3) test_seqinc_comparison);
+  addCFunc3Bucket("memtest-solidbits-comparison", 
+		  (CFunc3) test_solidbits_comparison);
+  addCFunc3Bucket("memtest-checkerboard-comparison", 
+		  (CFunc3) test_checkerboard_comparison);
+  addCFunc3Bucket("memtest-blockseq-comparison", 
+		  (CFunc3) test_blockseq_comparison);
+  addCFunc3Bucket("memtest-walkbits-comparison", 
+		  (CFunc3) test_walkbits_comparison);
+  addCFunc3Bucket("memtest-bitspread-comparison", 
+		  (CFunc3) test_bitspread_comparison);
+  addCFunc3Bucket("memtest-bitflip-comparison", 
+		  (CFunc3) test_bitflip_comparison);
   addCFunc3Bucket("memtest-stuck-address", (CFunc3) test_stuck_address);
+  addCFunc3Bucket("memtest-thorsten0f", (CFunc3) test_thorsten0f);
+  addCFunc3Bucket("memtest-thorsten16", (CFunc3) test_thorsten16);
 }
+
+static const char *writeDAC(const char *p) {
+   int value = pop();
+   int channel = pop();
+   halWriteDAC(channel, value);
+   return p;
+}
+
+
