@@ -39,6 +39,7 @@
 \
 \ run echomode
 : echo-mode s" echomode" find if exec endif ;
+: echo-mode-cb s" configboot.sbi" find if fpga echo-mode endif ;
 
 \
 \ comm stuff...
