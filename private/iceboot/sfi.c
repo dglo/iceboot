@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.69 $
- * $Author: arthur $
- * $Date: 2003-07-11 17:49:47 $
+ * $Revision: 1.69.2.1 $
+ * $Author: patton $
+ * $Date: 2003-07-15 18:47:01 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1630,7 +1630,6 @@ int main(int argc, char *argv[]) {
      { "blperr", (int) &blperr },
      { "rawCurrents", (int) &rawCurrents },
      { "disableCurrents", (int) &disableCurrents },
-     { "build", ICESOFT_BUILD },
   };
   const int nInitConstants = sizeof(initConstants)/sizeof(initConstants[0]);
 
