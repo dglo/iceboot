@@ -45,14 +45,6 @@ int executeImage(const void *addr, int nbytes) {
    return 0;
 }
 
-int isInputData(void) {
-   if (halIsConsolePresent()) {
-      return (*(volatile int *)(REGISTERS + 0x280))&0x1f;
-   }
-
-   return hal_FPGA_TEST_msg_ready();
-}
-
 /* get m or n parameter...
  */
 static int mnparm(int reg) {
@@ -123,7 +115,7 @@ static const char *prtPLL(const char *p) {
 int osInit(int argc, char *argv[]) { 
    extern short *acqAddr;
    extern int acqLen;
-   
+
     addConstantBucket("REGISTERS", REGISTERS);
 #if defined(CPLD_ADDR)
     addConstantBucket("CPLD", CPLD_ADDR);
@@ -233,29 +225,17 @@ int fpga_config(int *p, int nbytes) {
    * we should just export the fpga config routine from
    * the hal...
    */
-  {  const char *domid = halGetBoardID();
-     unsigned t;
-     int i;
+  {  unsigned long long domid = halGetBoardIDRaw();
      
      /* low 32 bits...
       */
-     for (t=0, i=0; i<8; i++) {
-	const char c = domid[11-i];
-	if (c>='0' && c<='9') t += (c - '0')<<(i*4);
-	else if (c>='a' && c<='f') t += (c - 'a' + 10)<<(i*4);
-	else if (c>='A' && c<='F') t += (c - 'A' + 10)<<(i*4);
-     }
-     *(volatile unsigned *)0x90081058 = t;
+     *(volatile unsigned *)0x90081058 = domid&0xffffffff;
 
      /* high 16 bits + ready bit...
+      *
+      * FIXME: we have to move the ready bit...
       */
-     for (t=0, i=0; i<4; i++) {
-	const char c = domid[3-i];
-	if (c>='0' && c<='9') t += (c - '0')<<(i*4);
-	else if (c>='a' && c<='f') t += (c - 'a' + 10)<<(i*4);
-	else if (c>='A' && c<='F') t += (c - 'A' + 10)<<(i*4);
-     }
-     *(volatile unsigned *)0x9008105c = t | 0x10000;
+     *(volatile unsigned *)0x9008105c = (domid>>32) | 0x10000;
   }
 
   return 0;
@@ -265,11 +245,13 @@ int fpga_config(int *p, int nbytes) {
  */
 int waitInputData(int ms) {
    int j;
+   
    for (j=0; j<ms*10; j++) {
       halUSleep(100);
-      if (isInputData()) break;
+      if (halIsInputData()) break;
    }
-   return isInputData();
+   
+   return halIsInputData();
 }
 
 void dcacheInvalidateAll(void) {
@@ -301,3 +283,5 @@ void dcacheInvalidateAll(void) {
 		 :
 		 : "r1" /* clobber list */);
 }
+
+

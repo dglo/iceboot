@@ -270,19 +270,27 @@ int flash_erase(const void *from, int bytes) {
       /* error? */
       if (sr&(1<<5)) { 
 	 if (sr&(1<<3)) {
+#if defined(FVERBOSE)
 	    printf("flash: error: vpp range error!\r\n");
+#endif
 	    break;
 	 }
 	 else if ( (sr&(3<<4)) == (3<<4)) {
+#if defined(FVERBOSE)
 	    printf("flash: error: command sequence error!\r\n");
+#endif
 	    break;
 	 }
 	 else if (sr&2) {
+#if defined(FVERBOSE)
 	    printf("flash: error: attempt to erase locked block!\r\n");
+#endif
 	    break;
 	 }
 	 else {
+#if defined(FVERBOSE)
 	    printf("flash: error: unknown error %04x\r\n", sr);
+#endif
 	    break;
 	 }
       }
@@ -304,8 +312,10 @@ int flash_erase(const void *from, int bytes) {
 
       for (j=0; j<sz && !err; j++) {
 	 if (block[j]!=0xffff) {
+#if defined(FVERBOSE)
 	    printf("verify error, chip %d, block %d [%p], offset %d (%d)\r\n",
 		   chip, i, block, j, sz);
+#endif
 	    err = 1;
 	 }
       }
@@ -317,6 +327,7 @@ int flash_erase(const void *from, int bytes) {
 
 const char *flash_errmsg(int stat) {
    static char msg[80];
+#if defined(FVERBOSE)
    if (stat == FEINVALID) {
       sprintf(msg, "flash: error: invalid argument\r\n");
    }
@@ -326,7 +337,8 @@ const char *flash_errmsg(int stat) {
    else {
       sprintf(msg, "flash: error: %d\r\n", stat);
    }
-   
+#endif   
+
    return msg;
 }
 

@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.85.2.1 $
+ * $Revision: 1.108 $
  * $Author: arthur $
- * $Date: 2004-01-14 05:25:36 $
+ * $Date: 2004-04-14 08:19:52 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -125,6 +125,7 @@ static const char *writeDAC(const char *p);
 static void *memalloc(size_t );
 static void initMemTests(void);
 static int newLine(const char *line);
+static void setErr(const char *msg);
 
 static int blperr = 0;
 
@@ -134,10 +135,15 @@ static int stacklen = 1024;
 
 typedef enum {
    EXC_STACK_UNDERFLOW = 1,
-   EXC_STACK_OVERFLOW = 2
+   EXC_STACK_OVERFLOW,
+   EXC_LINE_TOO_LONG,
+   EXC_UNKNOWN_WORD,
 } ExceptionCodes;
 
-enum { ACQ_MODE_CPU = 1, ACQ_MODE_DISC = 2, ACQ_MODE_PP = 3 };
+enum { ACQ_MODE_CPU = 1, 
+       ACQ_MODE_DISC = 2, 
+       ACQ_MODE_PP = 3,
+       ACQ_MODE_LED = 4};
 
 static jmp_buf jenv;
 
@@ -288,27 +294,40 @@ static Bucket *allocBucketFromRoot(const char *nm, Bucket *rbp) {
 
   if (rbp->nm==NULL) { bp = rbp; }
   else {
-    for (bp = rbp; bp!=NULL; bp = bp->next) {
-      if (strcmp(bp->nm, nm)==0) break;
-    }
-    if (bp==NULL) {
-      /* not found...
-       */
-      bp = (Bucket *) memalloc(sizeof(Bucket));
-      bp->nm = NULL;
-    }
+     /* root bucket is not empty, we have to
+      * search to see if the bucket already 
+      * exists...
+      */
+     for (bp = rbp; bp!=NULL; bp = bp->next) {
+	if (strcmp(bp->nm, nm)==0) {
+	   /* found one!  clear it and return it...
+	    */
+	   if (bp->type==FUNC && bp->u.func!=NULL) {
+	      free((char *)bp->u.func);
+	      bp->u.func = NULL;
+	   }
+	   return bp;
+	}
+     }
+     if (bp==NULL) {
+	/* not found -- allocate memory...
+	 */
+	bp = (Bucket *) memalloc(sizeof(Bucket));
+	bp->nm = NULL;
+     }
   }
 
   if (bp->nm==NULL) {
+     /* the bucket is newly allocated, fill it out...
+      */
     bp->nm = strdup(nm);
-    bp->next = NULL;
+    
+    if (bp!=rbp) {
+       bp->next = rbp->next;
+       rbp->next = bp;
+    }
   }
-  if (bp!=rbp) {
-    /* insert into bucket chain...
-     */
-    bp->next = rbp->next;
-    rbp->next = bp;
-  }
+  
   return bp;
 }
 
@@ -655,8 +674,10 @@ static int newLine(const char *line) {
     }
     else {
       Bucket *bp = lookupBucket(word);
+
       if (bp==NULL) {
-	printf("unknown word '%s'\r\n", word);
+	 setErr(word);
+	 longjmp(jenv, EXC_UNKNOWN_WORD);
       }
       else {
 	if (bp->type==CFUNC) line = bp->u.cfunc(line);
@@ -830,7 +851,7 @@ static void acq(int mask, int ntrig, int mode) {
    /* enable ping-pong mode if selected */
    if (mode == ACQ_MODE_PP)
        hal_FPGA_TEST_enable_ping_pong();
-   
+
    for (i=0; i < ntrig; i++) {
 
        if (mode != ACQ_MODE_PP) {
@@ -840,6 +861,9 @@ static void acq(int mask, int ntrig, int mode) {
            }
            else if (mode == ACQ_MODE_CPU) {
                hal_FPGA_TEST_trigger_forced(halTrig);
+           }
+           else if (mode == ACQ_MODE_LED) {
+               hal_FPGA_TEST_trigger_LED(halTrig);
            }
            
            /* wait for done...
@@ -910,6 +934,13 @@ static const char *acq_pp(const char *p) {
    return p;
 }
 
+static const char *acq_led(const char *p) {
+   const int mask = pop();
+   const int ntrig = pop();
+   acq(mask, ntrig, ACQ_MODE_LED);
+   return p;
+}
+
 static int readDAC(int channel) { return halReadDAC(channel); }
 static int readADC(int adc) { return halReadADC(adc); }
 static int readBaseADC(void) { return halReadBaseADC(); }
@@ -939,12 +970,29 @@ static const char *icopy(const char *p) {
 }
 
 static const char *enableHV(const char *p) {
-   halEnablePMT_HV();
+   halPowerUpBase();
+   halEnableBaseHV();
    return p;
 }
 
 static const char *disableHV(const char *p) {
-   halDisablePMT_HV();
+   halPowerDownBase();
+   return p;
+}
+
+static const char *enableLED(const char *p) {
+    hal_FPGA_TEST_enable_LED();
+    return p;
+}
+
+static const char *disableLED(const char *p) {
+    hal_FPGA_TEST_disable_LED();
+    return p;
+}
+
+static const char *setLEDdelay(const char *p) {
+   int delay = pop();
+   hal_FPGA_TEST_set_atwd_LED_delay(delay);
    return p;
 }
 
@@ -1335,7 +1383,7 @@ static const char *odumpt(const char *p) {
    return p;
 }
 
-static const char *reboot(const char *p) {
+static const char *rebootDOM(const char *p) {
    halBoardReboot();
    return p;
 }
@@ -1378,6 +1426,34 @@ static const char *prtTemp(const char *p) {
    const int temp = pop();
    printf("temperature: %.2f degrees C\r\n", formatTemp(temp));
    return p;
+}
+
+static int readPressure(void) {  
+
+    unsigned int loop_cnt = 1000;
+    unsigned long pressure_sum = 0;
+    unsigned long voltage_sum = 0;
+    float mean_pressure, mean_voltage;
+    int pressure, i;
+
+    halEnableBarometer();
+    halUSleep(1000);
+
+    /* Average the barometer reading and the 5V supply reading */
+    for(i = 0; i < loop_cnt; i++) {
+        pressure_sum += halReadADC(DOM_HAL_ADC_PRESSURE);
+        voltage_sum  += halReadADC(DOM_HAL_ADC_5V_POWER_SUPPLY);                        
+    }
+    
+    halDisableBarometer();
+    
+    mean_pressure = ((float) pressure_sum) / loop_cnt;
+    mean_voltage  = ((float) voltage_sum)  / loop_cnt;
+
+    /* This converts the pressure to KPa */
+    pressure = (int) ((mean_pressure/mean_voltage + 0.095)/0.009);
+    
+    return pressure;
 }
 
 static const char *memcp(const char *p) {
@@ -1424,7 +1500,6 @@ static const char *boardID(const char *p) {
 
 static const char *domID(const char *p) {
    const char *id = halGetBoardID();
-   if (strlen(id)==16) id += 4; /* skip fixed part... */
    push((int) id);
    push(strlen(id));
    return p;
@@ -1440,22 +1515,31 @@ static const char *hvid(const char *p) {
 static void prtCurrents(int rawCurrents) {
    float currents[5];
    /* volts per count */
-   const float vpc = 2.5/4095.0;
+   const float vpc = 2.048/1023.0;
    /* voltages */
    const float volts[] = { 5, 3.3, 2.5, 1.8, -5 };
    /*                     5V  3.3V 2.5V 1.8V -5V */
-   const float gain[] = { 100, 100, 100, 100, 100 };
+   const float gain[] = { 100, 10, 10, 100, 100 };
    const float reff[] = { 1,   0.98, 0.80, 0.96, 1 };
    const float ueff[] = { 1,     1,    1, 1,   1 };
    const float *eff = (rawCurrents) ? ueff : reff;
+
+   /*                     5V  3.3V 2.5V 1.8V -5V */
+   /* 1.8V and 2.5V have been swapped back
+    * 
+    * FIXME: this order is no longer needed, should
+    * we remove it?
+    */
+   const int   order[] = { 0, 1,   2,   3,    4 };
    int ii;
    
    /* format the currents... */
    for (ii=0; ii<5; ii++) {
-      currents[ii] = 
-	 eff[ii]*(5/volts[ii])*((readADC(3+ii) * vpc)/gain[ii])*10;
+      currents[order[ii]] = 
+	 eff[ii]*
+	 (5/volts[order[ii]])*((readADC(3+ii) * vpc)/gain[ii])*10;
    }
-	  
+
    /* write the string... */
    printf("  5V %.3fA, 3.3V %.3fA, "
 	  "2.5V %.3fA, 1.8V %.3fA, -5V %.3fA, %.1f (C)",
@@ -1697,61 +1781,542 @@ static const char *doInstall(const char *p) {
 static const char *pldVersions(const char *p) {
    /* print out the versioning info...
     */
-   printf("version      %d [%d]\r\n", halGetVersion(), halGetHWVersion());
-   printf("build number %d [%d]\r\n", halGetBuild(), halGetHWBuild());
+   printf("version      %d [%d]\r\n", halGetHWVersion(), halGetVersion());
+   printf("build number %d [%d]\r\n", halGetHWBuild(), halGetBuild());
    printf("matches?     %s\r\n", 
 	  halGetVersion()==halGetHWVersion() ? "yes" : "no");
    return p;
 }
 
 static const char *fpgaVersions(const char *p) {
-#define EXPVER(a) \
-  (expected_versions[FPGA_VERSIONS_TYPE_ICEBOOT][FPGA_VERSIONS_##a])
-
+#define EXPVER(a, b) (expected_versions[a][FPGA_VERSIONS_##b])
    /* FIXME: put the correct address in here... */
    unsigned *versions = (unsigned *) 0x90000000;
-   
+   const int type = 
+      (versions[0] <= FPGA_VERSIONS_TYPE_STF_NOCOM) ? 
+      versions[0] : FPGA_VERSIONS_TYPE_ICEBOOT;
+
    /* print out the versioning info...
     */
    printf("fpga type    %d\r\n", versions[0]);
    printf("build number %d\r\n", (versions[2]<<16) | versions[1]);
    printf("matches?     %s\r\n", 
-	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT, 
+	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT,
 				  DOM_HAL_FPGA_COMP_ALL)?"no":"yes");
    printf("versions:\r\n");
    printf("  com_fifo           %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_COM_FIFO], EXPVER(COM_FIFO));
+	  versions[FPGA_VERSIONS_COM_FIFO], EXPVER(type, COM_FIFO));
    
    printf("  com_dp             %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_COM_DP], EXPVER(COM_DP));
+	  versions[FPGA_VERSIONS_COM_DP], EXPVER(type, COM_DP));
 
    printf("  daq                %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_DAQ], EXPVER(DAQ));
+	  versions[FPGA_VERSIONS_DAQ], EXPVER(type, DAQ));
 
    printf("  pulsers            %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_PULSERS], EXPVER(PULSERS));
+	  versions[FPGA_VERSIONS_PULSERS], EXPVER(type, PULSERS));
 
    printf("  discriminator_rate %d [%d]\r\n",
 	  versions[FPGA_VERSIONS_DISCRIMINATOR_RATE], 
-	  EXPVER(DISCRIMINATOR_RATE));
+	  EXPVER(type, DISCRIMINATOR_RATE));
 
    printf("  local_coinc        %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_LOCAL_COINC], EXPVER(LOCAL_COINC));
+	  versions[FPGA_VERSIONS_LOCAL_COINC], EXPVER(type, LOCAL_COINC));
 
    printf("  flasher_board      %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_FLASHER_BOARD], EXPVER(FLASHER_BOARD));
+	  versions[FPGA_VERSIONS_FLASHER_BOARD], EXPVER(type, FLASHER_BOARD));
 
    printf("  trigger            %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_TRIGGER], EXPVER(TRIGGER));
+	  versions[FPGA_VERSIONS_TRIGGER], EXPVER(type, TRIGGER));
 
    printf("  local_clock        %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_LOCAL_CLOCK], EXPVER(LOCAL_CLOCK));
+	  versions[FPGA_VERSIONS_LOCAL_CLOCK], EXPVER(type, LOCAL_CLOCK));
 
    printf("  supernova          %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(SUPERNOVA));
+	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(type, SUPERNOVA));
 
    return p;
 }
+
+/* we do our own buffering for stdout -- up to 128 chars...
+ */
+static int  soBufLen = 0;
+static char soBuf[256];
+
+static void soPutm(const char *s, const int len) {
+   if (soBufLen+len>=sizeof(soBuf)-1) longjmp(jenv, EXC_LINE_TOO_LONG);
+   memcpy(soBuf + soBufLen, s, len);
+   soBufLen += len;
+}
+static void soPuts(const char *s) { soPutm(s, strlen(s)); }
+static void soPutc(char c) { soPutm(&c, 1); }
+static void soFlush(void) {
+   if (soBufLen>0) write(1, soBuf, soBufLen);
+   soBufLen = 0;
+}
+
+static const char *errmsg = NULL;
+
+static void setErr(const char *msg) {
+   if (errmsg!=NULL) {
+      free((char *)errmsg);
+      errmsg=NULL;
+   }
+   errmsg = strdup(msg);
+}
+
+static void prtErr(int err) {
+   if (err==EXC_STACK_UNDERFLOW) {
+      printf("Error: stack underflow");
+   }
+   else if (err==EXC_STACK_OVERFLOW) {
+      printf("Error: stack overflow");
+   }
+   else if (err==EXC_LINE_TOO_LONG) {
+      printf("Error: line too long");
+   }
+   else if (err==EXC_UNKNOWN_WORD) {
+      printf("Error: unknown word");
+   }
+   else {
+      printf("Error: unknown");
+   }
+
+   /* print extra info... */
+   if (errmsg!=NULL) {
+      printf(": '%s'", errmsg);
+      free((char *)errmsg);
+      errmsg=NULL;
+   }
+   printf("\r\n");
+   fflush(stdout);
+}
+
+static int isInputData(void) { return halIsInputData(); }
+
+#define PSKHACK
+#undef PSKHACK
+
+#if defined(PSKHACK)
+
+/* HACK!!! -- don't forget to take these lines out!!! */
+#define CORDICBITS 15
+#include "../../crdc.c"
+
+/* collect a bunch of angles...
+ */
+static const char *scanAngles(const char *p) {
+   const int nAngles = pop();
+   short *mem = (short *) 0x01000000;
+   int i;
+   #define PSKSTAT ( * (unsigned volatile *) 0x9008100c )
+   #define PSKSIN  ( * (unsigned volatile *) 0x90081010 )
+   #define PSKCOS  ( * (unsigned volatile *) 0x90081014 )
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+   
+   for (i=0; i<nAngles; i++, mem++) {
+      /* wait for new phase... */
+      while ( ((PSKSTAT ^ PSKSTAT)&1) == 0) ;
+      *mem = getPhase(PSKSIN, PSKCOS);
+   }
+
+   #undef PSKSTAT
+   #undef PSKSIN
+   #undef PSKCOS
+   return p;
+}
+
+static const char *dumpCordic(const char *p) {
+   int i;
+   short *mem = (short *) 0x01000000;
+   const int pattern = pop();
+   const int ntries = pop();
+   unsigned lastStat;
+
+   /* step size is in 2*pi*maxint ... */
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+
+   lastStat = PSKSTAT;
+   for (i=0; i<ntries; i++, mem++) {
+
+      if (i==4) (* (unsigned volatile *) 0x90081038) = pattern;
+      
+      /* wait for new phase... */
+      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+      /* mark our new phase... */
+      lastStat = PSKSTAT;
+
+      /* wait 1us for cordic to be ready... */
+      halUSleep(1);
+
+      /* get the cordic value */
+      *mem = PSKCORDIC;
+   }
+   #undef PSKSTAT
+   #undef PSKCORDIC
+
+   return p;
+}
+
+static const char *dumpIQ(const char *p) {
+   int i;
+   unsigned *mem = (unsigned *) 0x01000000;
+   const int ntries = pop();
+   unsigned lastStat;
+
+   /* step size is in 2*pi*maxint ... */
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKI      ( * (unsigned volatile *) 0x90081010 )
+   #define PSKQ      ( * (unsigned volatile *) 0x90081014 )
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+
+   lastStat = PSKSTAT;
+   for (i=0; i<ntries; i++, mem++) {
+      /* wait for new phase... */
+      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+      /* mark our new phase... */
+      lastStat = PSKSTAT;
+
+      /* wait 1us for cordic to be ready... */
+      halUSleep(1);
+
+      /* get the cordic value */
+      *mem = PSKI; mem++;
+      *mem = PSKQ;
+   }
+   #undef PSKSTAT
+   #undef PSKI
+   #undef PSKQ
+
+   return p;
+}
+
+static inline void setRxOsc(unsigned char phase, unsigned short rate) {
+   *(unsigned volatile *)0x90081008 = 1|(phase<<8)|(rate<<16);
+}
+
+static inline void setTxOsc(unsigned short gain, unsigned short rate) {
+   *(unsigned volatile *)0x90081000 = 1|(gain<<8)|(rate<<16);
+}
+
+static void pskLock(int channel) {
+   unsigned lastStat;
+   int nok = 0;
+   short phase = 0;
+   short minorAdjust = 0;
+   unsigned short rate = 1<<(channel+4);
+   static int offset = 0; /* HACK: cycle offsets */
+   short offsetMask = (3>>(2-channel));
+   
+   /* step size is in 2*pi*maxint ... */
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
+
+   /* HACK: cycle offset gets updated... */
+   offset++; offset|=offsetMask;
+
+   /* setup the oscillator */
+   setRxOsc( (offset<<8)|phase, rate);
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+
+   lastStat = PSKSTAT;
+   while (nok<8) {
+      /* wait for new cycle... */
+      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+      /* mark our new phase... */
+      lastStat = PSKSTAT;
+
+      /* wait 1us for cordic to be ready... */
+      halUSleep(1);
+
+      /* is it ok? */
+      {  const short angle = PSKCORDIC;
+         const int angleThreshold = 4; /* 1 part in 64 (too loose?) */
+         const int correction = angle>>8;
+         const int ok = abs(correction) < angleThreshold;
+
+#if 0
+         printf("angle=%hd correction=%hd minor=%hd phase=%hd offset=%hd\r\n", 
+                angle, correction, minorAdjust, phase, offset);
+#endif
+
+         if (ok) {
+            nok++; 
+            minorAdjust += correction;
+         }
+         else {
+            nok=0;
+            minorAdjust = 0;
+            
+            /* adjust angle -- use only top 8 bits of angle... */
+            phase += correction;
+            setRxOsc((offset<<8)|phase, rate);
+               
+            /* wait for another cycle */
+            while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+            /* mark our new phase... */
+            lastStat = PSKSTAT;
+         }
+      }
+   }
+
+   /* make minor adjustment... */
+   phase += minorAdjust>>3;
+   setRxOsc((offset<<8)|phase, rate);
+
+#if 0
+   printf("final phase: %hd\r\n", phase);
+#endif
+
+   #undef PSKSTAT
+   #undef PSKCORDIC
+}
+
+static const char *doPskLock(const char *p) {
+   pskLock(pop());
+   return p;
+}
+
+#if 0
+/* sync to channel ch -- assume a 10101010 pattern
+ * already established on ... */
+static void pskSync(int channel) {
+   unsigned lastStat;
+   int nok = 0;
+   short phase = 0;
+   short minorAdjust = 0;
+   unsigned short rate = 1<<(channel+4);
+
+   /* step size is in 2*pi*maxint ... */
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
+
+   /* setup the oscillator */
+   setRxOsc(phase, rate);
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+
+   lastStat = PSKSTAT;
+   while (nok<8) {
+      /* wait for new cycle... */
+      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+      /* mark our new phase... */
+      lastStat = PSKSTAT;
+
+      /* wait 1us for cordic to be ready... */
+      halUSleep(1);
+
+      /* is it ok? */
+      {  const short angle = PSKCORDIC;
+         const int angleThreshold = 8; /* 1 part in 32 (too loose) */
+         const int correction = angle>>8;
+         const int ok = abs(correction) < angleThreshold;
+
+         printf("angle=%hd correction=%hd minor=%hd phase=%hd\r\n", 
+                angle, correction, minorAdjust, phase);
+
+         if (ok) {
+            nok++; 
+            minorAdjust += correction;
+         }
+         else {
+            nok=0;
+            minorAdjust = 0;
+   
+            /* adjust angle -- use only top 8 bits of angle... */
+            phase += correction;
+            setRxOsc(phase, rate);
+               
+            /* wait for another cycle */
+            while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+            /* mark our new phase... */
+            lastStat = PSKSTAT;
+         }
+      }
+   }
+
+   /* make minor adjustment... */
+   phase += minorAdjust>>3;
+   setRxOsc(phase, rate);
+   printf("final phase: %hd\r\n", phase);
+
+   #undef PSKSTAT
+   #undef PSKCORDIC
+}
+#endif
+
+/* go into psk echo mode -- never comes out... */
+static int pskEchoMode(int ich, int och, int npackets) {
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKRX     ( * (unsigned volatile *) 0x90081024 )
+   #define PSKTX     ( * (unsigned volatile *) 0x90081038 )
+
+   int lastSend = 0;
+
+   /* phase lock */
+   printf("echo mode phase lock...\r\n");
+   pskLock(0);
+
+   printf("emit carrier...\r\n");
+
+#if 0   
+   /* wait for sync bits msg */
+
+   
+   {  unsigned lastStat = PSKSTAT & 2;
+      int i;
+   
+      for (i=0; i<npackets; i++) {
+         /* wait for something in rx register... */
+         printf("wait tx...\r\n");
+         while ( ((lastStat ^ PSKSTAT)&2) == 0) ;
+
+         /* mark the new status */
+         lastStat = PSKSTAT;
+
+         /* wait for next time slot... */
+         while (lastSend<20*40) {
+            halUSleep(1);
+            lastSend++;
+         }
+         
+         /* copy word... */
+         PSKTX = PSKRX;
+         lastSend = 0;
+         
+         printf("lock...\r\n");
+         pskLock(ich);
+
+         halUSleep(1);
+         lastSend++;
+      }
+   }
+#endif
+
+   return npackets;
+
+   #undef PSKSTAT
+   #undef PSKRX
+   #undef PSKTX
+}
+
+/* start an echo test... */
+static int pskEchoTest(int ich, int channel, int npackets) {
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKRX     ( * (unsigned volatile *) 0x90081024 )
+   #define PSKTX     ( * (unsigned volatile *) 0x90081038 )
+   #define PSKTXSTAT ( * (unsigned volatile *) 0x90081004 )
+
+   unsigned queue[8];
+   const unsigned nq = sizeof(queue)/sizeof(queue[0]);
+   unsigned qh=0, qt=0;
+   int nerrs = 0;
+   int i;
+   unsigned rn = 0;
+   int us = 0;
+   unsigned short rate = 1<<(channel+4);
+
+   /* setup tx osc... */
+   setTxOsc(4, rate);
+
+   /* lock to input... */
+   pskLock(ich);
+   
+   {  unsigned lastStat = PSKSTAT & 2;
+      int nr = 0, nw = 0;
+      unsigned lastBusy = PSKTXSTAT;
+      
+      while (nr<npackets) {
+
+         if (us>1000*3) {
+            printf("psk-echo-test: timeout!\r\n");
+            printf(" nr=%d nw=%d nerrs=%d\r\n", nr, nw, nerrs);
+            printf(" qh=%u qt=%u nq=%u\r\n", qh, qt, nq);
+            printf(" us=%u\r\n", us);
+            printf(" PSKSTAT=%08x PSKTXSTAT=%08x\r\n", PSKSTAT, PSKTXSTAT);
+            return nerrs;
+         }
+         
+         if (lastBusy ^ PSKTXSTAT) {
+            unsigned newBusy = PSKTXSTAT;
+            printf("tx busy change: %d -> %d\n", lastBusy, newBusy);
+            lastBusy = newBusy;
+         }
+
+         /* anything read? ... */
+         if ( ((lastStat ^ PSKSTAT)&2) == 0) {
+            /* no, stuff another packet out if there is room... */
+            if (qh-qt<nq && nw<npackets && us>1000) {
+               queue[qh%nq] = rn = rn*69069+1;
+               qh++;
+               PSKTX = rn;
+               lastBusy = PSKTXSTAT;
+               us = 0;
+               nw++;
+               halUSleep(1000);
+#if 0
+            }
+         }
+         else {
+#endif
+            /* mark the new status */
+            lastStat = PSKSTAT;
+
+            /* mark packet read... */
+            nr++;
+
+            /* check the value returned... */
+            if (qh!=qt) {
+               unsigned v = queue[qt%nq];
+               const unsigned rx = PSKRX;
+               
+               qt++;
+               if (v!=rx) {
+                  printf("error: expected=%08x read=%08x [%08x]\r\n",
+                         v, rx, v^rx);
+                  nerrs++;
+               }
+            }
+            else {
+               printf("error: received a packet, yet no packet was sent!\r\n");
+               nerrs++;
+            }
+         }
+#if 1 
+      }
+#endif
+
+         halUSleep(1);
+         us++;
+      }
+   }
+   
+   return nerrs;
+
+   #undef PSKSTAT
+   #undef PSKRX
+   #undef PSKTX
+   #undef PSKTXSTAT
+}
+
+#endif
 
 int main(int argc, char *argv[]) {
   char *line;
@@ -1790,7 +2355,7 @@ int main(int argc, char *argv[]) {
      { "usleep", udelay },
      { "od", odump },
      { "odt", odumpt },
-     { "reboot", reboot },
+     { "reboot", rebootDOM },
      { "analogMuxInput", analogMuxInput },
      { "prtTemp", prtTemp },
      { "swicmd", swicmd },
@@ -1828,7 +2393,17 @@ int main(int argc, char *argv[]) {
      { "acq-forced" , acq_cpu },
      { "acq-disc" , acq_disc },
      { "acq-pp" , acq_pp },
+     { "acq-led", acq_led },
      { "zd"	, zdump },
+     { "enableLED", enableLED },
+     { "disableLED", disableLED },
+     { "setLEDdelay", setLEDdelay },
+#if defined(PSKHACK)
+     { "scan-angles", scanAngles },
+     { "dump-cordic", dumpCordic },
+     { "dump-iq", dumpIQ },
+     { "psk-lock", doPskLock },
+#endif
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -1843,6 +2418,7 @@ int main(int argc, char *argv[]) {
      { "i", loopCount },
      { "readBaseDAC", readBaseDAC },
      { "readBaseADC", readBaseADC },
+     { "readPressure", readPressure },
   };
   const int nInitCFuncs0 = sizeof(initCFuncs0)/sizeof(initCFuncs0[0]);
 
@@ -1884,7 +2460,7 @@ int main(int argc, char *argv[]) {
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
 
-#if 0
+#if defined(PSKHACK)
   static struct {
     const char *nm;
     CFunc3 cf;
@@ -1892,7 +2468,10 @@ int main(int argc, char *argv[]) {
      /* don't forget to document these commands
       * at the top of this file!
       */
-    { "flashBurn", flashBurn },
+#if defined(PSKHACK)
+    { "psk-echo-mode", pskEchoMode },
+    { "psk-echo-test", pskEchoTest },
+#endif
   };
   const int nInitCFuncs3 = sizeof(initCFuncs3)/sizeof(initCFuncs3[0]);
 #endif
@@ -1913,7 +2492,7 @@ int main(int argc, char *argv[]) {
   };
   const int nInitConstants = sizeof(initConstants)/sizeof(initConstants[0]);
 
-  int li = 0, ei = 0, done = 0, i;
+  int li = 0, ei = 0, i;
   extern void initMemTests(void);
   char *lines[32];
   int hl = 0, bl = -1;
@@ -1921,8 +2500,6 @@ int main(int argc, char *argv[]) {
   int escaped = 0;
   int err;
 
-  osInit(argc, argv);
- 
   if ((stack = (int *) memalloc(sizeof(int) * stacklen))==NULL) {
     printf("can't allocate stack...\n");
     return 1;
@@ -1947,7 +2524,7 @@ int main(int argc, char *argv[]) {
   for (i=0; i<nInitCFuncs2; i++) 
     addCFunc2Bucket(initCFuncs2[i].nm, initCFuncs2[i].cf);
 
-#if 0
+#if defined(PSKHACK)
   for (i=0; i<nInitCFuncs3; i++) 
     addCFunc3Bucket(initCFuncs3[i].nm, initCFuncs3[i].cf);
 #endif
@@ -1955,9 +2532,16 @@ int main(int argc, char *argv[]) {
   for (i=0; i<nInitConstants; i++) 
     addConstantBucket(initConstants[i].nm, initConstants[i].constant);
 
+  /* os specific initializations... */
+  osInit(argc, argv);
+
   initMemTests();
 
-  sourceStartup();
+  if ((err=setjmp(jenv))!=0) {
+     printf("In startup.fs: ");
+     prtErr(err);
+  }
+  else sourceStartup();
 
   printf(" Iceboot (%s) build %s.....\r\n", STRING(PROJECT_TAG),
 	 STRING(ICESOFT_BUILD));
@@ -1965,29 +2549,15 @@ int main(int argc, char *argv[]) {
   line = (char *) memalloc(linesz);
 
   if ((err=setjmp(jenv))!=0) {
-     if (err==EXC_STACK_UNDERFLOW) {
-	printf("Error: stack underflow\r\n");
-     }
-     else if (err==EXC_STACK_OVERFLOW) {
-	printf("Error: stack overflow\r\n");
-     }
-     else {
-	printf("Error: unknown!\r\n");
-     }
-
+     prtErr(err);
      /* reset parsed line... */
      escaped = 0;
      ei = 0;
      li = 0;
   }
 
-  write(1, "\r\n> ", 4);
-  while (!done) {
-    if (ei==linesz) {
-      printf("!!!! line too long!!!\r\n");
-      break;
-    }
-
+  soPuts("\r\n> ");
+  while (1) {
     /* check for input, if there is none some
      * amount of time (500ms?) then update the currents
      * on the top bar...
@@ -2012,15 +2582,15 @@ int main(int argc, char *argv[]) {
 	  if (!isInputData()) prtCurrents(rawCurrents);
 	  
 	  /* set normal video, reset the current cursor location */
-	  printf("%c[m%c8", 27, 27); fflush(stdout);
+	  printf("%c[m%c8", 27, 27); 
+	  fflush(stdout);
        }
     }
-    
-    while (1) {
-       const int buflen = 128;
+
+    /* always flush before reading... */
+    soFlush();
+    {  const int buflen = 4096;
        char buf[buflen];
-       char wbuf[buflen*2]; /* '\r' -> '\r\n' conversion... */
-       int nwbuf = 0;
        int nr = read(0, buf, sizeof(buf));
        int idx;
 
@@ -2035,6 +2605,9 @@ int main(int argc, char *argv[]) {
 #if 0
 	  printf("\r\n[%d] 0x%02x\r\n", escaped, c);
 #endif
+	  
+	  /* FIXME: why do we get a '0' on epxa4??? */
+	  if (c == 0) continue;
     
 	  if (escaped) {
 	     char mv[8];
@@ -2058,7 +2631,7 @@ int main(int argc, char *argv[]) {
 		/* right... */
 		if (li<ei) {
 		   sprintf(mv, "%c[C", 27);
-		   write(1, mv, strlen(mv));
+		   soPuts(mv);
 		   li++;
 		}
 	     }
@@ -2066,7 +2639,7 @@ int main(int argc, char *argv[]) {
 		/* left... */
 		if (li>0) {
 		   sprintf(mv, "%c[D", 27);
-		   write(1, mv, strlen(mv));
+		   soPuts(mv);
 		   li--;
 		}
 	     }
@@ -2087,14 +2660,14 @@ int main(int argc, char *argv[]) {
 		 */
 		sprintf(cmd, "%c[D", 27);
 		while (li>0) {
-		   write(1, cmd, strlen(cmd));
+		   soPuts(cmd);
 		   li--;
 		}
 		
 		/* clear to end of line
 		 */
 		sprintf(cmd, "%c[K", 27);
-		write(1, cmd, strlen(cmd));
+		soPuts(cmd);
 		
 		/* add the line...
 		 */
@@ -2104,7 +2677,7 @@ int main(int argc, char *argv[]) {
 		
 		/* write the line...
 		 */
-		write(1, line, strlen(line));
+		soPuts(line);
 	     }
 	     
 	     escaped = 0;
@@ -2127,7 +2700,7 @@ int main(int argc, char *argv[]) {
 		if (li<ei) {
 		   if (!snw) snw = !isspace(line[li]);
 		   sprintf(mv, "%c[C", 27);
-		   write(1, mv, strlen(mv));
+		   soPuts(mv);
 		   li++;
 		   
 		   if (snw && li<ei && isspace(line[li])) break;
@@ -2146,7 +2719,7 @@ int main(int argc, char *argv[]) {
 	     while (1) {
 		if (li>0) {
 		   sprintf(mv, "%c[D", 27);
-		   write(1, mv, strlen(mv));
+		   soPuts(mv);
 		   li--;
 		   
 		   if (!snw) snw = !isspace(line[li]);
@@ -2159,18 +2732,18 @@ int main(int argc, char *argv[]) {
 	  else if (c=='\b' || c==0x7f) {
 	     if (li>0) {
 		char cmd[8];
+
 		sprintf(cmd, "%c%c[K", '\b', 27);
-		write(1, cmd, strlen(cmd));
+		soPuts(cmd);
 		
 		if (li<ei) {
 		   /* we need to write the rest...
 		    */
 		   sprintf(cmd, "%c7", 27);
-		   write(1, cmd, 2);
-		   write(1, line+li, (ei-li));
+		   soPuts(cmd);
+		   soPutm(line+li, (ei-li));
 		   sprintf(cmd, "%c8", 27);
-		   write(1, cmd, 2);
-		   
+		   soPuts(cmd);
 		   memmove(line+li-1, line+li, ei-li);
 		}
 		li--;
@@ -2181,9 +2754,8 @@ int main(int argc, char *argv[]) {
 	     /* we need to flush on '\r' so things
 	      * come out in the right order...
 	      */
-	     memcpy(wbuf + nwbuf, "\r\n", 2); nwbuf+=2;
-	     write(1, wbuf, nwbuf);
-	     nwbuf = 0;
+	     soPuts("\r\n");
+	     soFlush();
 
 	     line[ei] = 0;
 
@@ -2197,14 +2769,12 @@ int main(int argc, char *argv[]) {
 		
 		if (newLine(line)) {
 		   printf("!!! error new line\r\n");
-		   done = 1;
-		   break;
 		}
 	     }
 	     
 	     bl = -1;
 	     li = ei = 0;
-	     memcpy(wbuf + nwbuf, "> ", 2); nwbuf+=2;
+	     soPuts("> ");
 	  }
 	  else {
 	     /* make space for character...
@@ -2215,15 +2785,7 @@ int main(int argc, char *argv[]) {
 	      */
 	     line[li] = c;
 	     
-	     /* echo character if we're in the middle
-	      * of a line -- otherwise, we can delay it...
-	      */
-	     if (li<ei) {
-		write(1, &c, 1);
-	     }
-	     else {
-		memcpy(wbuf + nwbuf, &c, 1); nwbuf++;
-	     }
+	     soPutc(c);
 	     
 	     ei++;
 	     li++;
@@ -2234,15 +2796,14 @@ int main(int argc, char *argv[]) {
 		/* we need to write the rest...
 		 */
 		sprintf(ec, "%c7", 27);
-		write(1, ec, 2);
-		write(1, line+li, (ei-li));
+		soPuts(ec);
+		soPutm(line+li, (ei-li));
 		sprintf(ec, "%c8", 27);
-		write(1, ec, 2);
+		soPuts(ec);
 	     }
 	  }
        }
-
-       if (nwbuf) write(1, wbuf, nwbuf);
+       soFlush();
     }
   }
   return 0;
@@ -2289,4 +2850,3 @@ static const char *writeDAC(const char *p) {
    halWriteDAC(channel, value);
    return p;
 }
-

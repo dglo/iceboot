@@ -3,8 +3,8 @@
 # by a workspace makefile, see iceboot-ws/Makefile for
 # details...
 #
-.c.o:
-	$(CC) -c $(CFLAGS) $<
+#.c.o:
+#	$(CC) -c $(CFLAGS) $<
 
 all: $(ICEBOOTBIN)
 

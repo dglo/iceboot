@@ -7,7 +7,7 @@ $(BUILD_DIR)/sfi.bin : $(BUILD_DIR)/sfi.elf
 
 $(BUILD_DIR)/boot.o : boot.S $(BOOT_PAYLOAD)
 	$(CPP) $(CPP_FLAGS) -DBINFILE=\"$(BOOT_PAYLOAD)\" -o $(BUILD_DIR)/$(*F).i $(<)
-	$(AS) $(A_FLAGS) $(INC_PATHS) -o $(@) $(BUILD_DIR)/$(*F).i
+	$(AS) $(A_FLAGS) $(INC_FLAGS) -o $(@) $(BUILD_DIR)/$(*F).i
 
 $(BUILD_DIR)/%.elf : $(BUILD_DIR)/%.o
 	$(LD) --script=$(BOOT_X) -o $(@) $(<)

@@ -8,14 +8,18 @@
 \
 0 850 writeDAC
 1 2097 writeDAC
-2 3000 writeDAC
+2 600 writeDAC
 3 2048 writeDAC
 4 850 writeDAC
 5 2097 writeDAC
-6 3000 writeDAC
+6 600 writeDAC
 7 1925 writeDAC
 9 500 writeDAC
-12 500 writeDAC
+10 700 writeDAC
+12 1023 writeDAC
+13 800 writeDAC
+14 1023 writeDAC
+15 1023 writeDAC
 
 \
 \ run stf server...
@@ -33,14 +37,16 @@
 : domapp s" domapp.sbi" find if fpga endif s" domapp" find if exec endif ;
 
 \
+\ run echomode
+: echo-mode s" echomode" find if exec endif ;
+
+\
 \ comm stuff...
 \
 $90081030 constant comctl
 $90081034 constant comstatus
 $90081038 constant comtx
 $9008103c constant comrx
-
-$50000000 constant CPLD
 
 s" iceboot.sbi" find if fpga drop $01200000 comctl ! endif
 
@@ -54,8 +60,12 @@ s" iceboot.sbi" find if fpga drop $01200000 comctl ! endif
 : tx-almost-empty comstatus @ $00010000 and s" tx-almost-empty: " type yorn ;
 : tx-almost-full comstatus @ $00020000 and s" tx-almost-full: " type yorn ;
 : tx-read-empty comstatus @ $00100000 and s" tx-read-empty: " type yorn ;
+: comm-avail comstatus @ $00000008 and s" comm-avail: " type yorn ;
 
-: prt-status rx-ready rx-empty rx-almost-full rx-full rx-count tx-almost-empty tx-almost-full tx-read-empty ;
+: prt-status-0 rx-ready rx-empty rx-almost-full rx-full ;
+: prt-status-1 rx-count tx-almost-empty tx-almost-full ;
+: prt-status-2 tx-read-empty comm-avail ;
+: prt-status prt-status-0 prt-status-1 prt-status-2 ;
 
 : set-rx-done 1 comctl ! ;
 
@@ -83,11 +93,22 @@ s" iceboot.sbi" find if fpga drop $01200000 comctl ! endif
 : echo-mk-pkt rcv drop dup @ swap dup 4 + @ swap free drop rand ; 
 : echo-pkt echo-mk-pkt send addr free drop ;
 
-: echo-mode 2000000000 0 ?DO echo LOOP ;
 : echo-pkt-mode 2000000000 0 ?DO echo-pkt LOOP ;
 
 \ $11223344 $90081058 !
 \ $15566 $9008105c ! 
 
 \ serial-power not if echo-mode endif
+
+CPLD $f + c@ constant boot-status
+
+: prt-init-done boot-status $4 and s" init_done: " type yorn ;
+: prt-n-config boot-status $8 and s" nCONFIG: " type yorn ;
+: prt-conf-done boot-status $10 and s" conf_done: " type yorn ;
+: prt-n-por boot-status $20 and s" nPOR: " type yorn ;
+: prt-n-reset boot-status $40 and s" nRESET: " type yorn ;
+: prt-comm-reset boot-status $80 and s" comm-reset: " type yorn ; 
+: prt-boot-status-0 prt-init-done prt-n-config prt-conf-done ;
+: prt-boot-status-1 prt-n-por prt-n-reset prt-comm-reset ;
+: prt-boot-status prt-boot-status-0 prt-boot-status-1 ;
 
