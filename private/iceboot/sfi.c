@@ -87,7 +87,10 @@ static const char *poke32(const char *pt) {
 
 /* name buckets...
  */
-typedef enum BucketTypeEnum { CFUNC, CFUNC1, CFUNC2, CFUNC3, CFUNC4, FUNC, CONSTANT } BucketType;
+typedef enum BucketTypeEnum { 
+   CFUNC, CFUNC1, CFUNC2, CFUNC3, CFUNC4, FUNC, CONSTANT 
+} BucketType;
+
 typedef struct BucketStruct {
   const char *nm;
   BucketType type;
@@ -928,29 +931,5 @@ void delay(int time)
   for(i = 0; i < time; i++);
 }
 
-/* allocate memory from SDRAM
- *
- * 4 byte alignment...
- */
-void *memalloc(size_t sz) {
-#if 0
-   extern int end;
-   static int *sbrkp = (int *) 0x08000000;
-   static int *ebrkp = (int *) 0x08060000;
-   const int inc = (sz+3)/4;
-   void *ret = sbrkp;
-   if (sz==0) return NULL;
-   
-   /* not enough memory?
-    */
-   if (inc + sbrkp >= ebrkp) return NULL;
-   sbrkp+=inc;
-   return ret;
-#else
-   return malloc(sz);
-#endif
-}
-
-void memfree(void *ptr) {
-  /* hey, we got 64MB! */
-}
+void *memalloc(size_t sz) { return malloc(sz); }
+void memfree(void *ptr) { free(ptr); }
