@@ -34,14 +34,16 @@
 \
 \ run domapp
 \
-: domapp-sbi s" domapp.sbi" find if fpga endif ;
-: domapp s" domapp" find if exec endif ;
-: domapp-test domapp-sbi s" domapp-test" find if exec endif ;
+: domapp s" domapp.sbi" find if fpga endif s" domapp" find if exec endif ;
 
 \
 \ run echomode
 : echo-mode s" echomode" find if exec endif ;
 : echo-mode-cb s" configboot.sbi" find if fpga echo-mode endif ;
+
+\
+\ run domcal
+: echo-mode s" domcal" find if exec endif ;
 
 \
 \ comm stuff...
