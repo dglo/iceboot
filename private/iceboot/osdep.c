@@ -83,8 +83,18 @@ int isInputData(void) {
    return poll(fds, 1, 0)==1;
 }
 
+/* FIXME: before we dump, make a copy and
+ * fixup all the addresses so they map to 0x41000000
+ * when this is done, we can remove the address in
+ * mmap() in flashdrv.c (get_flash_limits())
+ */
 static void dumpflash(int sig) {
-   int fd = open("flash.dump", O_WRONLY|O_CREAT|O_TRUNC, 0644);
+   int fd;
+   const char* dumpfile = getenv("FLASH_DUMP_FILE");
+   if (0 == dumpfile) {
+     dumpfile = "flash.dump";
+   }
+   fd = open(dumpfile, O_WRONLY|O_CREAT|O_TRUNC, 0644);
    if (fd>=0) {
       void *flash_start, *flash_end;
       flash_get_limits(NULL, &flash_start, &flash_end);

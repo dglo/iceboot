@@ -23,3 +23,10 @@ $(BIN_DIR)/ice%.hex : $(BUILD_DIR)/%.elf
 
 $(BIN_DIR)/%.bin.gz: $(BUILD_DIR)/%.bin
 	gzip -c $(<) > $(@)
+
+$(BIN_DIR)/iceboot : $(BIN_DIR)/sfi
+	@test -L $(@D) || $(LN) $(<F) $(@) 
+
+$(BIN_DIR)/iceboot-nfis: $(NFIS_OBJS) $(LIBRARY_EXISTS)
+	@test -d $(@D) || mkdir -p $(@D)
+	$(CC)  $(NFIS_OBJS) $(C_FLAGS) $(LD_FLAGS) $(LOAD_LIBDIRS) $(filter-out -liceboot,$(LOAD_LIBS)) -o $@
