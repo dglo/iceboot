@@ -27,7 +27,6 @@
  *   \arg \b \ -- the rest of the line is a comment
  *   \arg \b drop -- drop the top value of the stack
  *   \arg \b dup -- duplicate the top value of the stack
- *   \arg \b over -- duplicate the next-to-top value at the top of the stack
  *   \arg \b ymodem1k -- push address and size of a buffer retrieved from
  * the ymodem protocol
  *   \arg \e nbytes \b allocate -- allocate nbytes on the heap
@@ -86,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.21 $
- * $Author: jacobsen $
- * $Date: 2007-08-22 15:58:18 $
+ * $Revision: 1.69 $
+ * $Author: arthur $
+ * $Date: 2003-07-11 17:49:47 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -101,22 +100,15 @@
 #include "zlib.h"
 #include "sfi.h"
 #include "iceboot/memtests.h"
-#include "hal/DOM_MB_hal.h"
+#include "hal/DOM_MB_pld.h"
+#include "hal/DOM_MB_fpga.h"
+#include "dom-fpga/fpga-versions.h"
 #include "iceboot/flash.h"
 #include "iceboot/fis.h"
 #include "osdep.h"
-#include "md5.h"
-#include "versions.h"
-#include "radio_hal.h"
-#include "radio_daq_hal.h"
 
-/* location and length of the buffer
- * used for acquisition...
- *
- * these are initialized in osInit in osdep.c...
- */
-short *acqAddr = NULL;
-int acqLen = 0;
+#define STR(a) #a
+#define STRING(a) STR(a)
 
 void delay(int);
 
@@ -125,7 +117,6 @@ static const char *writeDAC(const char *p);
 static void *memalloc(size_t );
 static void initMemTests(void);
 static int newLine(const char *line);
-static void setErr(const char *msg);
 
 static int blperr = 0;
 
@@ -135,16 +126,8 @@ static int stacklen = 1024;
 
 typedef enum {
    EXC_STACK_UNDERFLOW = 1,
-   EXC_STACK_OVERFLOW,
-   EXC_LINE_TOO_LONG,
-   EXC_UNKNOWN_WORD,
+   EXC_STACK_OVERFLOW = 2
 } ExceptionCodes;
-
-enum { ACQ_MODE_CPU = 1, 
-       ACQ_MODE_DISC = 2, 
-       ACQ_MODE_PP = 3,
-       ACQ_MODE_LED = 4};
-
 static jmp_buf jenv;
 
 void push(int v) { 
@@ -294,40 +277,27 @@ static Bucket *allocBucketFromRoot(const char *nm, Bucket *rbp) {
 
   if (rbp->nm==NULL) { bp = rbp; }
   else {
-     /* root bucket is not empty, we have to
-      * search to see if the bucket already 
-      * exists...
-      */
-     for (bp = rbp; bp!=NULL; bp = bp->next) {
-	if (strcmp(bp->nm, nm)==0) {
-	   /* found one!  clear it and return it...
-	    */
-	   if (bp->type==FUNC && bp->u.func!=NULL) {
-	      free((char *)bp->u.func);
-	      bp->u.func = NULL;
-	   }
-	   return bp;
-	}
-     }
-     if (bp==NULL) {
-	/* not found -- allocate memory...
-	 */
-	bp = (Bucket *) memalloc(sizeof(Bucket));
-	bp->nm = NULL;
-     }
+    for (bp = rbp; bp!=NULL; bp = bp->next) {
+      if (strcmp(bp->nm, nm)==0) break;
+    }
+    if (bp==NULL) {
+      /* not found...
+       */
+      bp = (Bucket *) memalloc(sizeof(Bucket));
+      bp->nm = NULL;
+    }
   }
 
   if (bp->nm==NULL) {
-     /* the bucket is newly allocated, fill it out...
-      */
     bp->nm = strdup(nm);
-    
-    if (bp!=rbp) {
-       bp->next = rbp->next;
-       rbp->next = bp;
-    }
+    bp->next = NULL;
   }
-  
+  if (bp!=rbp) {
+    /* insert into bucket chain...
+     */
+    bp->next = rbp->next;
+    rbp->next = bp;
+  }
   return bp;
 }
 
@@ -544,51 +514,26 @@ static const char *iffunc(const char *pr) {
   return pr;
 }
 
+#if 0
 /* do begin until loop...
  */
 static const char *begin(const char *p) {
-   char line[128];
+   /* FIXME: skip whitespace...
+    */
 
-   /* initialize line */
-   strcpy(line, "");
-   
    /* keep getting words until we get a ';' or UNTIL...
     */
-   while (1) {
-      char word[128];
-      int wlen = 0;
 
-      /* skip whitespace...
-       */
-      while (isspace(*p)) p++;
-  
-      /* get next word...
-       */
-      while (*p && !isspace(*p)) { word[wlen] = *p; p++; wlen++; }
-      word[wlen] = 0;
-
-      if (strcmp(word, "until")==0) {
-	 break;
-      }
-      else if (strcmp(word, ";")==0 || *p==0) {
-	 printf("begin: end of line with no until!\r\n");
-	 return p;
-      }
-      else {
-	 strcat(line, word);
-	 strcat(line, " ");
-      }
-   }
-   
-   /* execute line until condition is true...
-    */
+   /* execute line...
    while (1) {
-      newLine(line);
+      const int ret = getLine(line);
       if (pop()!=0) break;
    }
+   */
    
    return p;
 }
+#endif
 
 /* returns: 0 not a number, 1 number num <- number
  */
@@ -674,10 +619,8 @@ static int newLine(const char *line) {
     }
     else {
       Bucket *bp = lookupBucket(word);
-
       if (bp==NULL) {
-	 setErr(word);
-	 longjmp(jenv, EXC_UNKNOWN_WORD);
+	printf("unknown word '%s'\r\n", word);
       }
       else {
 	if (bp->type==CFUNC) line = bp->u.cfunc(line);
@@ -777,7 +720,7 @@ static const char *rcvMsg(const char *p) {
    char *msg = (char *) malloc(4096);
    char *tmp = NULL;
    int type, len;
-   int ret = hal_FPGA_receive(&type, &len, msg);
+   int ret = hal_FPGA_TEST_receive(&type, &len, msg);
 
    if (ret) {
       printf("rcv: unable to receive msg!\r\n");
@@ -802,189 +745,16 @@ static const char *sendMsg(const char *p) {
    const char *addr = (const char *) pop();
    const int type = pop();
    
-   if (hal_FPGA_send(type, len, addr)) {
+   if (hal_FPGA_TEST_send(type, len, addr)) {
       printf("send: unable to send msg!\r\n");
    }
 
    return p;
 }
 
-/* simulate "real" acquisition to sdram...
- * 
- * fill upper 16M with data...
- */
-static void acq(int mask, int ntrig, int mode) {
-   int halTrig = 0;
-   short *addr = acqAddr;
-   short *ch0 = NULL, *ch1 = NULL, *ch2 = NULL, *ch3 = NULL, 
-      *ch4 = NULL, *ch5 = NULL, *ch6 = NULL, *ch7 = NULL, *fadc = NULL;
-   short *clkbuf;
-   int i, incr = 8;
-   int maxacq;
-   long long clk0, clk1;
-
-   if (mask & 0x0f) {
-     halTrig |= HAL_FPGA_TEST_TRIGGER_ATWD0;
-     if (mask & 1) { ch0 = addr; addr += 128; incr += 128; }
-     if (mask & 2) { ch1 = addr; addr += 128; incr += 128; }
-     if (mask & 4) { ch2 = addr; addr += 128; incr += 128; }
-     if (mask & 8) { ch3 = addr; addr += 128; incr += 128; }
-   }
-   if ((mask & 0xf0) && (mode != ACQ_MODE_PP)) {
-     halTrig |= HAL_FPGA_TEST_TRIGGER_ATWD1;
-     if (mask & 16) { ch4 = addr; addr += 128; incr += 128; }
-     if (mask & 32) { ch5 = addr; addr += 128; incr += 128; }
-     if (mask & 64) { ch6 = addr; addr += 128; incr += 128; }
-     if (mask & 128) { ch7 = addr; addr += 128; incr += 128; }
-   }
-   if ((mask & 0x100) && (mode != ACQ_MODE_PP)) { 
-     halTrig |= HAL_FPGA_TEST_TRIGGER_FADC;
-     fadc = addr;
-     addr += 256;
-     incr += 256;
-   }
-   clkbuf = addr;
-
-   maxacq = ( acqLen/sizeof(short)) / incr;
-   if (ntrig > maxacq || ntrig == 0) ntrig = maxacq;
-   
-   /* enable ping-pong mode if selected */
-   if (mode == ACQ_MODE_PP)
-       hal_FPGA_TEST_enable_ping_pong();
-
-   for (i=0; i < ntrig; i++) {
-
-       if (mode != ACQ_MODE_PP) {
-           /* start trigger */
-           if (mode == ACQ_MODE_DISC) {
-               hal_FPGA_TEST_trigger_disc(halTrig);
-           }
-           else if (mode == ACQ_MODE_CPU) {
-               hal_FPGA_TEST_trigger_forced(halTrig);
-           }
-           else if (mode == ACQ_MODE_LED) {
-               hal_FPGA_TEST_trigger_LED(halTrig);
-           }
-           
-           /* wait for done...
-            */
-           while (!hal_FPGA_TEST_readout_done(halTrig)) ;
-
-           /*
-            * readout the ATWD timestamp clocks
-            */
-           clk0 = hal_FPGA_TEST_get_atwd0_clock();
-           clk1 = hal_FPGA_TEST_get_atwd1_clock();
-           memcpy(clkbuf, &clk0, 8);
-           memcpy(clkbuf+4, &clk1, 8);
-           
-           /* now readout...
-            */
-           hal_FPGA_TEST_readout(ch0, ch1, ch2, ch3, 
-                                 ch4, ch5, ch6, ch7, 128, 
-                                 fadc, 256, halTrig);
-       }
-       else {         
-           /* Wait until ping-pong trigger and then readout */
-           hal_FPGA_TEST_readout_ping_pong(ch0, ch1, ch2, ch3, 128, mask); 
-
-           /* Get the ATWD timestamp */
-           clk0 = hal_FPGA_TEST_get_ping_pong_clock();
-           memcpy(clkbuf, &clk0, 8);
-           
-           /* Indicate that read is done for that ATWD */
-           hal_FPGA_TEST_readout_ping_pong_done();
-       }
-
-       if (ch0) ch0 += incr; 
-       if (ch1) ch1 += incr; 
-       if (ch2) ch2 += incr; 
-       if (ch3) ch3 += incr;
-       if (ch4) ch4 += incr; 
-       if (ch5) ch5 += incr; 
-       if (ch6) ch6 += incr; 
-       if (ch7) ch7 += incr;
-       if (fadc) fadc += incr; 
-       clkbuf += incr;
-   }
-
-   /* disable ping-pong mode if selected */
-   if (mode == ACQ_MODE_PP)
-       hal_FPGA_TEST_disable_ping_pong();
-}
-
-static const char *acq_cpu(const char *p) {
-   const int mask = pop();
-   const int ntrig = pop();
-   acq(mask, ntrig, ACQ_MODE_CPU);
-   return p;
-}
-
-static const char *acq_disc(const char *p) {
-   const int mask = pop();
-   const int ntrig = pop();
-   acq(mask, ntrig, ACQ_MODE_DISC);
-   return p;
-}
-
-static const char *acq_pp(const char *p) {
-   const int mask = pop();
-   const int ntrig = pop();
-   acq(mask, ntrig, ACQ_MODE_PP);
-   return p;
-}
-
-static const char *acq_led(const char *p) {
-   const int mask = pop();
-   const int ntrig = pop();
-   acq(mask, ntrig, ACQ_MODE_LED);
-   return p;
-}
-
 static int readDAC(int channel) { return halReadDAC(channel); }
 static int readADC(int adc) { return halReadADC(adc); }
 static int readBaseADC(void) { return halReadBaseADC(); }
-
-static const char *reqBoot(const char *p) {
-  /* request reboot from DOR */
-  if (halIsFPGALoaded()) {
-     hal_FPGA_request_reboot();
-     while (!hal_FPGA_is_reboot_granted()) ;
-  }
-  
-  return p;
-}
-
-static const char *md5sum(const char *p) {
-   int len = pop();
-   void *addr = (void *) pop();
-   unsigned char bin_buffer[128/8];
-   char *msg = (unsigned char *) calloc(128/4, 1);
-   int i;
-
-   memset(bin_buffer, 0, sizeof(bin_buffer));
-   md5_buffer(addr, len, bin_buffer);
-   for (i=0; i<128/8; i++) {
-      const char digit[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8',
-                             '9', 'a', 'b', 'c', 'd', 'e', 'f' };
-      msg[i*2] = digit[(bin_buffer[i]>>4)&0xf];
-      msg[i*2+1] = digit[bin_buffer[i]&0xf];
-   }
-   push((int) msg);
-   push(128/4);
-   
-   return p;
-}
-
-static const char *iset(const char *p) {
-   const int n = pop();
-   int *to = (int *) pop();
-   const int value = pop();
-   int i;
-   
-   for (i=0; i<n; i++) to[i] = value;
-   return p;
-}
 
 /* copy integers from one location to another...
  * 
@@ -1000,201 +770,14 @@ static const char *icopy(const char *p) {
    return p;
 }
 
-/* are the two memory locations equal?
- */
-static int ieq(int addr1, int addr2, int n) {
-   const char *p1 = (const char *) addr1;
-   const char *p2 = (const char *) addr2;
-   int i;
-   for (i=0; i<n; i++) if (p1[i] != p2[i]) return 0;
-   return 1;
-}
-
 static const char *enableHV(const char *p) {
-   halPowerUpBase();
-   halEnableBaseHV();
+   halEnablePMT_HV();
    return p;
 }
 
 static const char *disableHV(const char *p) {
-   halPowerDownBase();
+   halDisablePMT_HV();
    return p;
-}
-
-static const char *enableLED(const char *p) {
-    hal_FPGA_TEST_enable_LED();
-    return p;
-}
-
-static const char *disableLED(const char *p) {
-    hal_FPGA_TEST_disable_LED();
-    return p;
-}
-
-static const char *setLEDdelay(const char *p) {
-   int delay = pop();
-   hal_FPGA_TEST_set_atwd_LED_delay(delay);
-   return p;
-}
-
-static const char *enableFB(const char *p) {
-    int err, config_t, valid_t, reset_t;    
-    err = hal_FB_enable(&config_t, &valid_t, &reset_t, DOM_FPGA_TEST);
-    if (err != 0) {
-        switch(err) {
-        case FB_HAL_ERR_CONFIG_TIME:
-            printf("Error: flasherboard configuration time too long\r\n");
-            break;
-        case FB_HAL_ERR_VALID_TIME:
-            printf("Error: flasherboard clock validation time too long\r\n");
-            break;
-        case FB_HAL_ERR_RESET_TIME:
-            printf("Error: flasherboard power-on reset time too long\r\n");
-            break;
-        default:
-            printf("Error: unknown flasherboard enable failure\r\n");
-            break;
-        }
-    }
-    push(reset_t);
-    push(valid_t);
-    push(config_t);
-    push(err);
-    return p;
-}
-
-static const char *enableFBmin(const char *p) {
-    
-    /* Warn users of risks... */
-    while (1) { 
-        char c;
-        int nr;
-        
-        printf("enableFBmin: LEDs may come on (steady-state) on older flasherboards.\r\n");
-        printf("Use enableFB unless CPLD state prevents it!  Continue [y/n]? ");
-        fflush(stdout);
-        
-        nr = read(0, &c, 1);
-        
-        if (nr==1) {
-            printf("%c\r\n", c); fflush(stdout);
-            if (toupper(c)=='Y') break;
-            else if (toupper(c)=='N') { return p; }
-        }
-    }
-    
-    hal_FB_enable_min();
-    return p;
-}
-
-static const char *disableFB(const char *p) {
-   hal_FB_disable();
-   return p;
-}
-
-static const char *setFBbrightness(const char *p) {
-    if (hal_FB_isEnabled()) {
-        int value = pop();
-        hal_FB_set_brightness(value);
-    }
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");
-
-    return p;
-}
-
-static const char *setFBwidth(const char *p) {
-    if (hal_FB_isEnabled()) {
-        int value = pop();
-        hal_FB_set_pulse_width(value);
-    }
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");
-    return p;
-}
-
-static const char *setFBenables(const char *p) {
-    if (hal_FB_isEnabled()){ 
-        int value = pop();
-        hal_FB_enable_LEDs(value);
-    }
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");
-    return p;
-}
-
-static const char *setFBmux(const char *p) {
-    if (hal_FB_isEnabled()) {
-        int value = pop();
-        hal_FB_select_mux_input(value);
-    }
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");
-    return p;
-}
-
-static const char *startFBflashing(const char *p) {
-    if (hal_FB_isEnabled())
-        hal_FPGA_TEST_start_FB_flashing();
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");
-    return p;
-}
-
-static const char *stopFBflashing(const char *p) {
-    if (hal_FB_isEnabled())
-        hal_FPGA_TEST_stop_FB_flashing();
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");    
-    return p;
-}
-
-static int getFBfw(void) {
-    int version = 0;
-    if (hal_FB_isEnabled())
-        version = hal_FB_get_fw_version();
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");
-    return version;
-
-}
-
-static int getFBhw(void) {
-    int version = 0;
-    if (hal_FB_isEnabled())
-        version = hal_FB_get_hw_version();
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");    
-    return version;
-}
-
-static const char *setFBdcdc(const char *p) {
-    if (hal_FB_isEnabled()) {
-        int value = pop();
-        hal_FB_set_DCDCen(value);
-    }
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");    
-    return p;
-}
-
-static const char *setFBrate(const char *p) {
-    if (hal_FB_isEnabled()) {
-        int value = pop();
-        hal_FPGA_TEST_FB_set_rate(value);
-    }
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");    
-    return p;
-}
-
-static int getFBdcdc(void) {
-    int val = -1;
-    if (hal_FB_isEnabled())
-        val = hal_FB_get_DCDCen();
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");    
-    return val;
 }
 
 /* crctab calculated by Mark G. Mendel, Network Systems Corporation */
@@ -1246,414 +829,35 @@ static unsigned short crctab[256] = {
  */
 #define updcrc(cp, crc) ( crctab[((crc >> 8) & 255)] ^ (crc << 8) ^ cp)
 
-static unsigned short crc16(const unsigned char *blk, int len) {
-   unsigned short v = 0;
-   int i;
-   
-   for (i=0; i<len; i++) v = updcrc(blk[i], v);
-   return v;
-}
-
-/* on the unix side, use "rb -b -y"
-
-            SENDER                                  RECEIVER
-                                                    "sb -k foo.*<CR>"
-            "sending in batch mode etc."
-                                                    C (command:rb)
-            SOH 00 FF foo.c NUL[123] CRC CRC
-                                                    ACK
-                                                    C
-            STX 01 FD Data[1024] CRC CRC
-                                                    ACK
-            SOH 02 FC Data[128] CRC CRC
-                                                    ACK
-            SOH 03 FB Data[100] CPMEOF[28] CRC CRC
-                                                    ACK
-            EOT
-                                                    NAK
-            EOT
-                                                    ACK
-                                                    C
-            SOH 00 FF NUL[128] CRC CRC
-                                                    ACK
-
-     
-  <soh> 01H
-  <eot> 04H
-  <ack> 06H
-  <nak> 15H
-  <can> 18H
-  <C>   43H
-  *
-  */
-static const char *sy(const char *p) {
-   int len = pop();
-   const unsigned char *addr = (const char *) pop();
-   const unsigned char soh = 0x01;
-   const unsigned char stx = 0x02;
-   const unsigned char eot = 0x04;
-   const unsigned char ack = 0x06;
-   /* const unsigned char nak = 0x15; */
-   const unsigned char C = 'C'; /* 0x43;*/
-   const unsigned char cpmeof = 0x1a;
-   
-   unsigned char reply;
-   unsigned char blk = 0;
-   unsigned short crc;
-   const int blklen = 1024+5;
-   unsigned char *buf = memalloc(blklen);
-   char slen[16];
-
-   snprintf(slen, sizeof(slen), "%d", len);
-
-   /* wait for 'C' */
-   while (read(0, &reply, 1)!=1 || reply!=C) ;
-   
-   /* SOH 00 FF iceboot.out\000len NULL[] CRC CRC */
-   memset(buf, 0, blklen);
-   buf[0] = soh;
-   buf[1] = blk;
-   buf[2] = ~blk;
-   {  char *fn = "iceboot.out";
-      strcpy(buf + 3, fn);
-      strcpy(buf + 3 + strlen(fn) + 1, slen);
-   }
-   crc = crc16(buf + 3, 128);
-   crc = updcrc(0, updcrc(0, crc));
-   buf[128+3] = crc>>8;
-   buf[128+4] = crc;
-   write(1, buf, blklen);
-   blk++;
-
-   /* wait for ack */
-   while (read(0, &reply, 1)!=1 || reply!=ack) ; 
-
-   /* wait for C */
-   while (read(0, &reply, 1)!=1 || reply!=C) ;
-     
-   /* send data... */
-   while (len>0) {
-      const int bl = (len<1024) ? len : 1024;
-      buf[0] = stx;
-      buf[1] = blk;
-      buf[2] = ~blk;
-      memcpy(buf+3, addr, bl);
-      if (bl!=1024) memset(buf+3+bl, cpmeof, 1024-bl);
-      crc = crc16(buf+3, 1024);
-      crc = updcrc(0, updcrc(0, crc));
-      buf[blklen-2] = crc>>8;
-      buf[blklen-1] = crc;
-      write(1, buf, blklen);
-      len -= bl;
-      addr += bl;
-      blk++;
-
-      /* wait for ack... */
-      while (read(0, &reply, 1)!=1 || reply!=ack) ;
-   }
-
-   /* send eot... */
-   write(1, &eot, 1);
-
-   /* hmmm, the webpage says these should be here, but
-    * apparently at least rb -b -y does not have them...
-    */
-#if 0
-   /* wait for nak */
-   while (read(0, &reply, 1)!=1 || reply!=nak) {
-      printf("sy: expecting: 0x%02x, got 0x%02x\r\n", nak, reply);
-   }
-
-   /* send eot... */
-   write(1, &eot, 1);
-#endif
-
-   /* wait for ack */
-   while (read(0, &reply, 1)!=1 || reply!=ack) ; 
-
-   /* wait for C */
-   while (read(0, &reply, 1)!=1 || reply!=C) ;
-
-   /* SOH 00 FF NULL[128] CRC CRC */
-   memset(buf, 0, blklen);
-   buf[0] = soh;
-   buf[1] = 0;
-   buf[2] = ~0;
-   crc = crc16(buf + 3, 128);
-   crc = updcrc(0, updcrc(0, crc));
-   buf[128+3] = crc>>8;
-   buf[128+4] = crc;
-   write(1, buf, blklen);
-
-   /* wait for ack */
-   while (read(0, &reply, 1)!=1 || reply!=ack) ; 
-
-   /* pheww... */
-
-   return p;
-}
-
-static int waitForC(void) {
-   int i;
-   const unsigned char C = 'C';
-   
-   /* continuously write 'C' until we get a packet...
-    */
-   for (i=0; i<400; i++) {
-      write(1, &C, 1);
-      if (waitInputData(200)) break;
-   }
-   
-   return i==400;
-}
-
-/* read a ymodem block, returns # of bytes of data in block or
- * -1 on an error, 0 on EOF...
- */
-static int yBlockRead(unsigned char *pkt) {
-   const unsigned char soh = 0x01;
-   const unsigned char stx = 0x02;
-   const unsigned char eot = 0x04;
-   /* const unsigned char ack = 0x06; */
-   /* const unsigned char nak = 0x15; */
-   const unsigned char can = 0x18;
-   /* const unsigned char C = 'C'; */
-   int nr=0, ret, pktsz = 0;
-
-   if ((ret = read(0, pkt, 1))!=1) return ret;
-
-   if (pkt[0]==soh) {
-      pktsz = 128 + 5;
-   }
-   else if (pkt[0]==stx) {
-      pktsz = 1024 + 5;
-   }
-   else if (pkt[0]==eot) {
-      pktsz = 1;
-   }
-   else if (pkt[0]==can) {
-      /* allow can, can to get through... */
-      pktsz = 2;
-   }
-   else {
-      fprintf(stderr, "ry: unexpected input: 0x%02x\r\n", pkt[0]);
-      return -1;
-   }
-   
-   nr=1;
-   while (nr<pktsz) {
-      if ((ret=read(0, pkt + nr, pktsz - nr))<=0) return ret;
-      nr += ret;
-   }
-
-   return nr;
-}
-
-static inline const unsigned char *yBlockDataPtr(const unsigned char *blk) {
-   return blk+3;
-}
-
-static int yBlockValidate(const unsigned char *blk, unsigned char blkn) {
-   const unsigned char soh = 0x01;
-   const unsigned char stx = 0x02;
-
-   if (blk[0]==soh || blk[0]==stx) {
-      const int pktsz = ((blk[0]==soh) ? 128 : 1024) + 2;
-      
-      /* block numbers must match... */
-      if ( blkn != blk[1] || blk[1] !=  ((~blk[2])&0xff) ) {
-         fprintf(stderr, "ry: block mismatch: %02x %02x != %02x\r\n",
-                 blk[1], blk[2], blkn);
-         return 1;
-      }
-      
-      if (crc16(yBlockDataPtr(blk), pktsz)!=0) {
-         fprintf(stderr, "ry: block %u: invalid crc\r\n", blkn);
-         return 1;
-      }
-   }
-   return 0;
-}
-
-/* new and improved ymodem receive -- here
- * we save the file data then the file name
- * so that "create" just works...
- *
- * we can also now accept multiple files...
- */
-static const char *ry(const char *p) {
-   const unsigned char soh = 0x01;
-   const unsigned char stx = 0x02;
-   const unsigned char eot = 0x04;
-   const unsigned char ack = 0x06;
-   /* const unsigned char nak = 0x15; */
-   const unsigned char C = 'C';
-   /* const unsigned char cpmeof = 0x1a; */
-   const unsigned char can = 0x18;
-
-   /* mark bottom of stack... */
-   push(0);
-
-   if (waitForC()) return p;
-   
-   while (1) {
-      unsigned char block[1024 + 5];
-      int nb;
-      char *fname, *addr;
-      int length;
-      unsigned char blockn = 0;
-      int nr;
-
-      if ((nb=yBlockRead(block))<0) {
-         fprintf(stderr, "ry: unable to read block: %d\r\n", nb);
-         return p;
-      }
-
-      if (yBlockValidate(block, blockn)) {
-         fprintf(stderr, "ry: unable to validate block\r\n");
-         return p;
-      }
-
-      if (nb==128+5 && block[0]==soh) {
-         const unsigned char *data = yBlockDataPtr(block);
-         
-         if (data[0]==0) {
-            /* all done... */
-            length=0;
-         }
-         else {
-            const char *t;
-            
-            if ((t=strrchr(data, '/'))!=NULL) t++;
-            else t=data;
-
-            fname = memalloc(strlen(t) + 1);
-            strcpy(fname, t);
-            length = atoi(data + strlen(fname) + 1);
-            addr = memalloc(length);
-
-            write(1, &ack, 1);
-            write(1, &C, 1);
-         }
-      }
-      else if (nb==2 && block[0]==can && block[1]==can) {
-         /* all done... */
-         break;
-      }
-      else if (nb==1 && block[0]==eot) {
-         /* all done... */
-         break;
-      }
-      else {
-         fprintf(stderr, "ry: invalid start block type: %02x\r\n", block[0]);
-         break;
-      }
-      
-      /* now take data... */
-      blockn++;
-      nr=0;
-      while (nr<length) {
-         int pktsz;
-         
-         if ((nb=yBlockRead(block))<0) {
-            fprintf(stderr, "ry: unable to read block: %d\r\n", nb);
-            return p;
-         }
-         
-         if (yBlockValidate(block, blockn)) {
-            fprintf(stderr, "ry: unable to validate block\r\n");
-            return p;
-         }
-         
-         if (nb==128+5 && block[0]==soh) {
-            pktsz=128;
-         }
-         else if (nb==1024+5 && block[0]==stx) {
-            pktsz=1024;
-         }
-         else if (nb==2 && block[0]==can && block[1]==can) {
-            break;
-         }
-         else {
-            /* yikes!!! */
-            fprintf(stderr, "ry: invalid data block type: %02x\r\n", block[0]);
-         }
-         
-         /* copy data... */
-         {  
-            const int len = (nr+pktsz<length) ? pktsz : length - nr;
-            memcpy(addr + nr, yBlockDataPtr(block),  len);
-            nr += len;
-         }
-
-         write(1, &ack, 1);
-         blockn++;
-      }
-
-      if (nr==length && length>0) {
-         /* expect eot here... */
-         if (yBlockRead(block)!=1 || block[0]!=eot) {
-            fprintf(stderr, "ry: no eot\r\n");
-         }
-         else {
-            if (length>0) {
-               push((int) addr);
-               push(length);
-               push((int) fname);
-               push(strlen(fname));
-            }
-            
-            write(1, &ack, 1);
-            
-            if (length>0) write(1, &C, 1);
-         }
-      }
-      else if (length==0) {
-         write(1, &ack, 1);
-      }
-      else {
-         fprintf(stderr, "ry: transfer cancelled: %d != %d\r\n",
-                 nr, length);
-      }
-
-      /* all done? */
-      if (length==0) break;
-   }
-   
-   return p;
-}
-
 /* check for serial data...
  */
 static const char *ymodem1k(const char *p) {
   const int bllen = 1024+2;
   unsigned char *block = (unsigned char *) memalloc(bllen);
   int blp = 0;
-  int blocknum=0, ndatabytes = 0;
+  int i, firstblock = 1, blocknum, ndatabytes = 0;
   unsigned char ack = 0x06;
   int crc = 1;
   char *addr = NULL;
-  unsigned char nak = 'C'; /* 0x43;*/
-  int filelen = 0;
-  unsigned char CAN[2] = { 0x18, 0x18 };
-  int transferring = 0;
+  unsigned char nak = 'C'; /* 0x15;*/
+  int filelen;
 
-  if (waitForC()) {
-     blperr = -1;
-     push(0); push(0);
-     return p;
+  /* continuously write 'C' until we get a packet...
+   */
+  for (i=0; i<400; i++) {
+     write(1, &nak, 1);
+     if (waitInputData(200)) break;
   }
-  
+
   /* read packet loop...
    */
   while (1) {
-    int nr, ret, pktsz = 0;
+    int i, nr, ret, pktsz = 0;
     unsigned char pkt, blknum[2];
 
     if ((ret = read(0, &pkt, 1))!=1) {
       blperr = -1;
       push(0); push(0);
-      write(1, CAN, 2);
       return p;
     }
 
@@ -1677,11 +881,11 @@ static const char *ymodem1k(const char *p) {
       read(0, &rnak, 1);
       write(1, &ack, 1);
       write(1, &nak, 1);
-      transferring = 0;
+      firstblock = 1;
       continue;
     }
     else {
-       printf("ymodem1k: unexpected start character: 0x%02x [%c]\r\n", 
+       printf("ymodem1k: unexpected character: 0x%02x [%c]\r\n", 
 	      pkt, pkt);
 
       blperr = pkt&0xff;
@@ -1696,7 +900,6 @@ static const char *ymodem1k(const char *p) {
       int nr = read(0, blknum+blp, 2 - blp);
       if (nr<=0) {
 	blperr = -3;
-        write(1, CAN, 2);
 	push(0); push(0);
 	return p;
       }
@@ -1705,92 +908,98 @@ static const char *ymodem1k(const char *p) {
 
     if ( blknum[0] !=  ((~blknum[1])&0xff) ) {
       blperr = -4;
-      write(1, CAN, 2);
       push(0); push(0);
       return p;
     }
 
-    if (pkt==0x01 && blknum[0]==0 && !transferring) {
-       /* start of frame -- header block... */
-       blocknum=0;
-       transferring=0;
+    if (firstblock) {
+      firstblock = 0;
+      
+      if (blknum[0] == 0) {
+	/* filename block
+	 */
+	blocknum = 0;
+      }
+      else if (blknum[0] == 1) {
+	/* data block...
+	 */
+	blocknum = 1;
+      }
+      else {
+	blperr = -6;
+	push(0);
+	push(0);
+	return p;
+      }
     }
     else {
-       /* blocknum must match!!! */
-       if (blknum[0] != (blocknum & 0xff)) {
-          /* fixme, we should just start over here...
-           */
-          blperr = -5;
-          write(1, CAN, 2);
-          push(0);
-          push(0);
-          return p;
-       }
-
-       transferring = 1;
+      if (blknum[0] != (blocknum & 0xff)) {
+	blperr = -5;
+	push(0);
+	push(0);
+	return p;
+      }
     }
-    
-    /* read the data portion of the packet... */
+
     nr = pktsz + crc + 1;
     blp = 0;
     while (blp<nr) {
-       int ret;
-       if ((ret=read(0, block + blp, nr-blp))<=0) {
-          blperr = -7;
-          write(1, CAN, 2);
-          push(0);
-          push(0);
-          return p;
-       }
-       blp+=ret;
+      int ret;
+      if ((ret=read(0, block + blp, nr-blp))<=0) {
+	blperr = -7;
+	push(0);
+	push(0);
+	return p;
+      }
+      blp+=ret;
     }
-    
+
     /* check crc...
      */
     if (crc) {
-       if (crc16(block, nr)!=0) {
-          blperr = -8;
-          write(1, CAN, 2);
-          push(0);
-          push(0);
-          return p;
-       }
+      unsigned short v = 0;
+      for (i=0; i<nr; i++) v = updcrc(block[i], v);
+
+      if (v!=0) {
+	blperr = -8;
+	push(0);
+	push(0);
+	return p;
+      }
     }
-    
+
     /* send ack...
      */
     write(1, &ack, 1);
-    
-    /* first packet has the name... */
+
     if (blocknum==0) {
-       int i;
-       
-       /* parse name...
-        */
-       for (i=0; i<pktsz; i++) if (block[i]==0) break;
-       
-       if (i==0) {
-          write(1, &nak, 1);
-          break;
-       }
-       
-       /* parse length...
-        */
-       filelen = atoi(block + i + 1);
-       
-       if (filelen>0) {
-          addr = (char *) memalloc(filelen);
-       }
-       
-       write(1, &nak, 1);
+      int i;
+
+      /* parse name...
+       */
+      for (i=0; i<pktsz; i++) if (block[i]==0) break;
+      
+      if (i==0) {
+	write(1, &nak, 1);
+	break;
+      }
+
+      /* parse length...
+       */
+      filelen = atoi(block + i + 1);
+
+      if (filelen>0) {
+	addr = (char *) memalloc(filelen);
+      }
+
+      write(1, &nak, 1);
     }
     else {
-       int tocp = 
-          (ndatabytes+pktsz > filelen) ? (filelen - ndatabytes) : pktsz;
-       memcpy(addr + ndatabytes, block, tocp);
-       ndatabytes+=tocp;
+      int tocp = (ndatabytes+pktsz > filelen) ? (filelen - ndatabytes) : pktsz;
+      memcpy(addr + ndatabytes, block, tocp);
+      ndatabytes+=tocp;
     }
-    
+
     blocknum++;
   }
 
@@ -1865,61 +1074,15 @@ static int do_fpga_config(int addr, int nbytes) {
    return fpga_config((int *) addr, nbytes);
 }
 
-/* re-program flasher board cpld...
- *
- * returns: 0 ok, non-zero error...
- */
-static int do_fb_cpld_config(int addr, int nbytes) {
-   return fb_cpld_config((int *) addr, nbytes);
-}
-
 static const char *sdup(const char *p) {
   int v = pop();
   push(v); push(v);
   return p;
 }
 
-static const char *over(const char *p) {
-  int u = pop();
-  int v = pop();
-  push(v); push(u); push(v);
-  return p;
-}
-
-/*
- * do a fast, compressed binary dump like od.
- * note the non-standard convention of
- * dumping words not bytes is nevertheless
- * slavishly followed.
- */
-#define ZDUMP_IOBUFSIZ 400
-static const char *zdump(const char *p) {
-  const int cnt = pop();
-  unsigned int *addr = (unsigned int*) pop();
-  char iobuf[ZDUMP_IOBUFSIZ];
-  int err, flush;
-  z_stream zs;
-  /* Give downstream decoder a heads-up on original text size */
-  write(1, &cnt, 4);
-  zs.zalloc = Z_NULL; zs.zfree = Z_NULL; zs.opaque = Z_NULL;
-  err = deflateInit(&zs, 5);
-  zs.next_in = (char*) addr;
-  zs.avail_in = 4*cnt;
-  flush = Z_NO_FLUSH;
-  while (err != Z_STREAM_END) {
-    zs.next_out = iobuf;
-    zs.avail_out = sizeof(iobuf);
-    err = deflate(&zs, flush);
-    if (zs.avail_out > 0) flush = Z_FINISH;
-    write(1, iobuf, sizeof(iobuf)-zs.avail_out);
-  }
-  err = deflateEnd(&zs);
-  return p;
-}
-
 /* dump memory at address count
  */
-const char *odump(const char *p) {
+static const char *odump(const char *p) {
    const int cnt = pop();
    unsigned *addr = (unsigned *) pop();
    int i;
@@ -1934,56 +1097,7 @@ const char *odump(const char *p) {
    return p;
 }
 
-/* dump memory at address count -- test version...
- *
- * unless you've a strong stomach, avert your
- * eyes from this code, the intention is to keep
- * the whole routine in icache...
- */
-static void pch(char ch) {
-   unsigned uch = ch;
-   /* wait for fifo to clear */
-   while (((*(volatile unsigned *)0x7fffc28c) & 0x1f)>=15) ;
-   *(volatile unsigned *)0x7fffc290 = uch;
-}
-
-static void phex(unsigned v) {
-   char digits[] = "0123456789abcdef";
-   int shift = 28;
-   while (shift>=0) {
-      pch( digits[(v>>shift)&0xf] );
-      shift-=4;
-   }
-   pch(' ');
-}
-
-static const char *odumpt(const char *p) {
-   const int cnt = pop();
-   unsigned *addr = (unsigned *) pop();
-   int i;
-
-   for (i=0; i<cnt; i+=4, addr+=4) {
-      phex((unsigned) addr);
-      phex(addr[0]);
-      if (i<cnt-1) phex(addr[1]);
-      if (i<cnt-2) phex(addr[2]);
-      if (i<cnt-3) phex(addr[3]);
-      pch('\r'); pch('\n');
-   }
-   return p;
-}
-
-static const char *flashReboot(const char *p) {
-   halSetFlashBoot();
-   return p;
-}
-
-static const char *serialReboot(const char *p) {
-   halClrFlashBoot();
-   return p;
-}
-
-static const char *rebootDOM(const char *p) {
+static const char *reboot(const char *p) {
    halBoardReboot();
    return p;
 }
@@ -2008,11 +1122,6 @@ static const char *analogMuxInput(const char *p) {
    return p;
 }
 
-static const char *disableAnalogMux(const char *p) {
-   halDisableAnalogMux();
-   return p;
-}
-
 static int readTemp(void) { return halReadTemp(); }
 
 static float formatTemp(int temp) {
@@ -2031,34 +1140,6 @@ static const char *prtTemp(const char *p) {
    const int temp = pop();
    printf("temperature: %.2f degrees C\r\n", formatTemp(temp));
    return p;
-}
-
-static int readPressure(void) {  
-
-    unsigned int loop_cnt = 50;
-    unsigned long pressure_sum = 0;
-    unsigned long voltage_sum = 0;
-    float mean_pressure, mean_voltage;
-    int pressure, i;
-
-    halEnableBarometer();
-    halUSleep(1000);
-
-    /* Average the barometer reading and the 5V supply reading */
-    for(i = 0; i < loop_cnt; i++) {
-        pressure_sum += halReadADC(DOM_HAL_ADC_PRESSURE);
-        voltage_sum  += halReadADC(DOM_HAL_ADC_5V_POWER_SUPPLY);                        
-    }
-    
-    halDisableBarometer();
-    
-    mean_pressure = ((float) pressure_sum) / loop_cnt;
-    mean_voltage  = ((float) voltage_sum)  / loop_cnt;
-
-    /* This converts the pressure to KPa */
-    pressure = (int) ((mean_pressure/mean_voltage + 0.095)/0.009);
-    
-    return pressure;
 }
 
 static const char *memcp(const char *p) {
@@ -2103,8 +1184,9 @@ static const char *boardID(const char *p) {
    return p;
 }
 
-const char *domID(const char *p) {
+static const char *domID(const char *p) {
    const char *id = halGetBoardID();
+   if (strlen(id)==16) id += 4; /* skip fixed part... */
    push((int) id);
    push(strlen(id));
    return p;
@@ -2117,62 +1199,25 @@ static const char *hvid(const char *p) {
    return p;
 }
 
-static const char *fbid(const char *p) {
-    char **id = 0;
-    int err;
-    if (hal_FB_isEnabled()) {        
-        err = hal_FB_get_serial(id);
-        if (err == 0) {
-            push((int)(*id));
-            push(strlen(*id));
-        }
-        else {
-            switch(err) {
-            case FB_HAL_ERR_ID_NOT_PRESENT:
-                printf("Error: flasherboard ID chip not detected\r\n");
-                break;
-            case FB_HAL_ERR_ID_BAD_CRC:
-                printf("Error: flasherboard ID CRC failure\r\n");
-                break;
-            default:
-                printf("Error: unknown flasherboard ID failure\r\n");
-                break;
-            }
-        }
-    }
-    else
-        printf("Please power the flasherboard with enableFB first!\r\n");
-   return p;
-}
-
 static void prtCurrents(int rawCurrents) {
    float currents[5];
    /* volts per count */
-   const float vpc = 2.048/1023.0;
+   const float vpc = 2.5/4095.0;
    /* voltages */
    const float volts[] = { 5, 3.3, 2.5, 1.8, -5 };
    /*                     5V  3.3V 2.5V 1.8V -5V */
-   const float gain[] = { 100, 10, 10,  10, 100 };
+   const float gain[] = { 100, 100, 100, 100, 100 };
    const float reff[] = { 1,   0.98, 0.80, 0.96, 1 };
    const float ueff[] = { 1,     1,    1, 1,   1 };
    const float *eff = (rawCurrents) ? ueff : reff;
-
-   /*                     5V  3.3V 2.5V 1.8V -5V */
-   /* 1.8V and 2.5V have been swapped back
-    * 
-    * FIXME: this order is no longer needed, should
-    * we remove it?
-    */
-   const int   order[] = { 0, 1,   2,   3,    4 };
    int ii;
    
    /* format the currents... */
    for (ii=0; ii<5; ii++) {
-      currents[order[ii]] = 
-	 eff[ii]*
-	 (5/volts[order[ii]])*((readADC(3+ii) * vpc)/gain[ii])*10;
+      currents[ii] = 
+	 eff[ii]*(5/volts[ii])*((readADC(3+ii) * vpc)/gain[ii])*10;
    }
-
+	  
    /* write the string... */
    printf("  5V %.3fA, 3.3V %.3fA, "
 	  "2.5V %.3fA, 1.8V %.3fA, -5V %.3fA, %.1f (C)",
@@ -2207,25 +1252,10 @@ static const char *doFisCreate(const char *p) {
 }
 
 static const char *doFisInit(const char *p) {
-   /* make sure... */
-   while (1) {
-      char c;
-      int nr;
-
-      printf("fis init: all data on flash will be lost: are you sure [y/n]? ");
-      fflush(stdout);
-
-      nr = read(0, &c, 1);
-
-      if (nr==1) {
-         printf("%c\r\n", c); fflush(stdout);
-         if (toupper(c)=='Y') break;
-         else if (toupper(c)=='N') { return p; }
-      }
-   }
    fisInit();
    return p;
 }
+
 
 static const char *doFisRm(const char *p) {
    char *s = (char *) mkString();
@@ -2241,15 +1271,11 @@ static const char *doFisUnlock(const char *p) {
    return p;
 }
 
+
 static const char *doFisLock(const char *p) {
    char *s = (char *) mkString();
    push(fisLock(s)==0 ? 1 : 0);
    free(s);
-   return p;
-}
-
-static const char *doFisGC(const char *p) {
-   fisGC();
    return p;
 }
 
@@ -2262,15 +1288,14 @@ static const char *doFisGC(const char *p) {
  */
 static const char *find(const char *p) {
    char *s = (char *) mkString();
-   unsigned long data_length;
-   void *flash_base = fisLookup(s, &data_length);
+   const struct fis_image_desc *img = fisLookup(s);
 
-   if (flash_base==NULL) {
+   if (img==NULL) {
       push(0);
    }
    else {
-      push((int) flash_base);
-      push((int) data_length);
+      push((int) img->flash_base);
+      push(img->data_length);
       push(1);
    }
    free(s);
@@ -2280,70 +1305,38 @@ static const char *find(const char *p) {
 /* search for and source startup.fs if it exists...
  */
 static void sourceStartup(void) {
-   unsigned long data_length;
-   void *flash_base = fisLookup("startup.fs", &data_length);
-   if (flash_base==NULL) return;
-   interpret((int) flash_base, (int) data_length);
+   const struct fis_image_desc *img = fisLookup("startup.fs");
+   if (img==NULL) return;
+   interpret((int) img->flash_base, img->data_length);
 }
 
-/* stack: addr count gzip [zaddr zcnt] 
+/* length address on stack (dropped)
+ * length address pushed on stack...
  */
-static const char *gzip(const char *p) {
-   const uLong srcLen = pop();
+static const char *zcompress(const char *p) {
    const Bytef *src = (const Byte *) pop();
-   uLongf destLen = 12 + srcLen * 101 / 100;
-   Bytef *dest = (Byte *) malloc(18 + destLen);
+   uLong srcLen = pop();
+   Bytef *dest = (Bytef *)malloc(12 + (int) (1.011*srcLen));
+   uLongf destLen;
 
-   if (dest==NULL) {
-      push(0); push(0);
-      return p;
+   compress(dest, &destLen, src, srcLen);
+
+   if (destLen>0) {
+      Bytef *ret = (Bytef *) malloc(destLen);
+      /* FIXME: prepend header..
+       */
+      memcpy(ret, dest, destLen);
+
+      /* FIXME: append crc32, isize...
+       */
+      push(destLen);
+      push((int) ret);
    }
-   
-   /* create gzip header... */
-   dest[0] = 0x1f; /* magic1 */
-   dest[1] = 0x8b; /* magic2 */
-   dest[2] = Z_DEFLATED; /* deflate */
-   dest[3] = 0;    /* no flags */
-   dest[4] = dest[5] = dest[6] = dest[7] = 0; /* no mtime */
-
-   /* compress data...
-    *
-    * this bit is a little funky.  we could write our own
-    * compress routine with -WBITS to turn off the header,
-    * but we're going to keep their routine and just start
-    * a bit earlier in the image...
-    */
-   if (compress(dest + 10 - 2, &destLen, src, srcLen)!=Z_OK) {
-      free(dest);
-      push(0); push(0);
-      return p;
+   else {
+      push(0);
+      push(0);
    }
-   
-   /* overwrite zlib header with gzip header */
-   dest[8] = 0;
-   dest[9] = 0x03; /* unix, for comparison to other files */
-
-   /* append crc32 and uncompressed size... 
-    *
-    * here, we overwrite the zlib adler32 with the gzip crc32...
-    */
-   {  uLong crc = crc32(crc32(0L, Z_NULL, 0), src, srcLen);
-     
-      dest[10 + destLen - 6 + 0] = crc&0xff;
-      dest[10 + destLen - 6 + 1] = (crc>>8)&0xff;
-      dest[10 + destLen - 6 + 2] = (crc>>16)&0xff;
-      dest[10 + destLen - 6 + 3] = (crc>>24)&0xff;
-   }
-
-   /* finally, the uncompressed file size... */
-   dest[10 + destLen - 6 + 4] = srcLen&0xff;
-   dest[10 + destLen - 6 + 5] = (srcLen>>8)&0xff;
-   dest[10 + destLen - 6 + 6] = (srcLen>>16)&0xff;
-   dest[10 + destLen - 6 + 7] = (srcLen>>24)&0xff;
-
-   /* FIXME: realloc doesn't work, why? */
-   push((int) dest);
-   push((int) destLen - 6 + 18);
+   free(dest);
    return p;
 }
 
@@ -2384,11 +1377,14 @@ static int uncomp(Bytef *dest, uLongf *destLen,
     }
     *destLen = stream.total_out;
 
+
     err = inflateEnd(&stream);
     return err;
 }
 
-/* stack: address count gunzip [zaddr zcount]
+
+/* length address on stack (dropped)...
+ * length address status pushed on stack...
  */
 static const char *gunzip(const char *p) {
    uLong srcLen = pop();
@@ -2430,12 +1426,6 @@ static const char *gunzip(const char *p) {
 	 ((int) src[srcLen-1]<<24);
       
       dest = (Bytef *) malloc(dl);
-      if (dest==NULL) {
-          printf("gunzip: error allocating destination memory (%d B)\r\n", dl);
-          push(0);
-          push(0);
-          return p;
-      }
       destLen = dl;
       ret = uncomp(dest, &destLen, src + idx, srcLen - idx - 8);
 
@@ -2466,814 +1456,28 @@ static const char *doInstall(const char *p) {
    return p;
 }
 
-static const char *pldVersions(const char *p) {
-   /* print out the versioning info...
-    */
-   printf("version      %d [%d]\r\n", halGetHWVersion(), halGetVersion());
-   printf("build number %d [%d]\r\n", halGetHWBuild(), halGetBuild());
-   printf("matches?     %s\r\n", 
-	  halGetVersion()==halGetHWVersion() ? "yes" : "no");
-   return p;
-}
-
-static const char *fpgaType(DOM_HAL_FPGA_TYPES type) {
-   if (type==DOM_HAL_FPGA_TYPE_STF_COM)         { return "stf"; }
-   else if (type==DOM_HAL_FPGA_TYPE_DOMAPP)     { return "domapp"; }
-   else if (type==DOM_HAL_FPGA_TYPE_CONFIGBOOT) { return "configboot"; }
-   else if (type==DOM_HAL_FPGA_TYPE_ICEBOOT)    { return "iceboot"; }
-   else if (type==DOM_HAL_FPGA_TYPE_STF_NOCOM)  { return "stf-no-comm"; }
-   return "unknown";
-}
-
 static const char *fpgaVersions(const char *p) {
-   const int type = hal_FPGA_query_type();
-#define FPGA_QUERY(a) \
-  hal_FPGA_query_component_version(DOM_HAL_FPGA_COMP_##a), \
-  hal_FPGA_query_component_expected(DOM_HAL_FPGA_TYPE_STF_COM, \
-    DOM_HAL_FPGA_COMP_##a)
-
+   /* FIXME: put the correct address in here... */
+   unsigned *versions = (unsigned *) 0x90000000;
+   
    /* print out the versioning info...
     */
-   printf("fpga type    %s\r\n", fpgaType(type));
-   printf("build number %d\r\n", hal_FPGA_query_build());
-   printf("matches?     %s\r\n", 
-	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_STF_COM,
-				  DOM_HAL_FPGA_COMP_ALL)?"no":"yes");
+   printf("fpga type    %d\r\n", versions[0]);
+   printf("build number %d\r\n", (versions[2]<<16) | versions[1]);
    printf("versions:\r\n");
-   printf("  com_fifo           %d [%d]\r\n", FPGA_QUERY(COM_FIFO));
-   printf("  com_dp             %d [%d]\r\n", FPGA_QUERY(COM_DP));
-   printf("  daq                %d [%d]\r\n", FPGA_QUERY(DAQ));
-   printf("  pulsers            %d [%d]\r\n", FPGA_QUERY(PULSERS));
-   printf("  discriminator_rate %d [%d]\r\n", FPGA_QUERY(DISCRIMINATOR_RATE));
-   printf("  local_coinc        %d [%d]\r\n", FPGA_QUERY(LOCAL_COINC));
-   printf("  flasher_board      %d [%d]\r\n", FPGA_QUERY(FLASHER_BOARD));
-   printf("  trigger            %d [%d]\r\n", FPGA_QUERY(TRIGGER));
-   printf("  local_clock        %d [%d]\r\n", FPGA_QUERY(LOCAL_CLOCK));
-   printf("  supernova          %d [%d]\r\n", FPGA_QUERY(SUPERNOVA));
-   printf("  dom_communications %d [%d]\r\n", hal_FPGA_dom_comm_version(),
-          hal_FPGA_dom_comm_expected_version());
-#undef FPGA_QUERY
+   printf("  com_fifo           %d\r\n", versions[FPGA_VERSIONS_COM_FIFO]);
+   printf("  com_dp             %d\r\n", versions[FPGA_VERSIONS_COM_DP]);
+   printf("  daq                %d\r\n", versions[FPGA_VERSIONS_DAQ]);
+   printf("  pulsers            %d\r\n", versions[FPGA_VERSIONS_PULSERS]);
+   printf("  discriminator_rate %d\r\n", 
+	  versions[FPGA_VERSIONS_DISCRIMINATOR_RATE]);
+   printf("  local_coinc        %d\r\n", versions[FPGA_VERSIONS_LOCAL_COINC]);
+   printf("  flasher_board      %d\r\n", 
+	  versions[FPGA_VERSIONS_FLASHER_BOARD]);
+   printf("  trigger            %d\r\n", versions[FPGA_VERSIONS_TRIGGER]);
+   printf("  local_clock        %d\r\n", versions[FPGA_VERSIONS_LOCAL_CLOCK]);
+   printf("  supernova          %d\r\n", versions[FPGA_VERSIONS_SUPERNOVA]);
 
-   return p;
-}
-
-/* we do our own buffering for stdout...
- */
-static int  soBufLen = 0;
-static char soBuf[256];
-
-static void soPutm(const char *s, const int len) {
-   if (soBufLen+len>=sizeof(soBuf)-1) {
-      soBufLen=0;
-      longjmp(jenv, EXC_LINE_TOO_LONG);
-   }
-   memcpy(soBuf + soBufLen, s, len);
-   soBufLen += len;
-}
-static void soPuts(const char *s) { soPutm(s, strlen(s)); }
-static void soPutc(char c) { soPutm(&c, 1); }
-static void soFlush(void) {
-   if (soBufLen>0) write(1, soBuf, soBufLen);
-   soBufLen = 0;
-}
-
-static const char *errmsg = NULL;
-
-static void setErr(const char *msg) {
-   if (errmsg!=NULL) {
-      free((char *)errmsg);
-      errmsg=NULL;
-   }
-   errmsg = strdup(msg);
-}
-
-static void prtErr(int err) {
-   if (err==EXC_STACK_UNDERFLOW) {
-      printf("Error: stack underflow");
-   }
-   else if (err==EXC_STACK_OVERFLOW) {
-      printf("Error: stack overflow");
-   }
-   else if (err==EXC_LINE_TOO_LONG) {
-      printf("Error: line too long");
-   }
-   else if (err==EXC_UNKNOWN_WORD) {
-      printf("Error: unknown word");
-   }
-   else {
-      printf("Error: unknown");
-   }
-
-   /* print extra info... */
-   if (errmsg!=NULL) {
-      printf(": '%s'", errmsg);
-      free((char *)errmsg);
-      errmsg=NULL;
-   }
-   printf("\r\n");
-   fflush(stdout);
-}
-
-static int isInputData(void) { return halIsInputData(); }
-
-/* read binary data from stdin:
- *
- * input:  number of bytes to read
- * output: addr len of buffer where data sits or 0, 0 on error... 
- */
-static const char *readBin(const char *p) {
-   int nbytes=pop();
-   unsigned char *b = (unsigned char *) memalloc(nbytes);
-   if (b==NULL) {
-       printf("readBin: couldn't allocate read buffer\r\n");
-       push(0);
-       push(0);
-       return p;
-   }
-   int nr = 0;
-   while (nr<nbytes) {
-      const int nleft = nbytes - nr;
-      const int blksz = (nleft > 4092) ? 4092 : nleft;
-      int n;
-      
-      if ((n=read(0, b + nr, blksz))<=0) {
-         push(0);
-         push(0);
-         return p;
-      }
-      nr += n;
-   }
-   push((int) b);
-   push(nbytes);
-   return p;
-}
-
-const char *release(const char *p) {
-   printf("%s %s\r\n", versions.tag, versions.build);
-   return p;
-}
-
-#define PSKHACK
-#undef PSKHACK
-
-#if defined(PSKHACK)
-
-/* HACK!!! -- don't forget to take these lines out!!! */
-#define CORDICBITS 15
-#include "../../crdc.c"
-
-/* collect a bunch of angles...
- */
-static const char *scanAngles(const char *p) {
-   const int nAngles = pop();
-   short *mem = (short *) 0x01000000;
-   int i;
-   #define PSKSTAT ( * (unsigned volatile *) 0x9008100c )
-   #define PSKSIN  ( * (unsigned volatile *) 0x90081010 )
-   #define PSKCOS  ( * (unsigned volatile *) 0x90081014 )
-
-   /* HACK: make sure table is computed... */
-   (void) getPhase(0, 0);
-   
-   for (i=0; i<nAngles; i++, mem++) {
-      /* wait for new phase... */
-      while ( ((PSKSTAT ^ PSKSTAT)&1) == 0) ;
-      *mem = getPhase(PSKSIN, PSKCOS);
-   }
-
-   #undef PSKSTAT
-   #undef PSKSIN
-   #undef PSKCOS
-   return p;
-}
-
-static const char *dumpCordic(const char *p) {
-   int i;
-   short *mem = (short *) 0x01000000;
-   const int pattern = pop();
-   const int ntries = pop();
-   unsigned lastStat;
-
-   /* step size is in 2*pi*maxint ... */
-   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
-   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
-
-   /* HACK: make sure table is computed... */
-   (void) getPhase(0, 0);
-
-   lastStat = PSKSTAT;
-   for (i=0; i<ntries; i++, mem++) {
-
-      if (i==4) (* (unsigned volatile *) 0x90081038) = pattern;
-      
-      /* wait for new phase... */
-      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
-
-      /* mark our new phase... */
-      lastStat = PSKSTAT;
-
-      /* wait 1us for cordic to be ready... */
-      halUSleep(1);
-
-      /* get the cordic value */
-      *mem = PSKCORDIC;
-   }
-   #undef PSKSTAT
-   #undef PSKCORDIC
-
-   return p;
-}
-
-static const char *dumpIQ(const char *p) {
-   int i;
-   unsigned *mem = (unsigned *) 0x01000000;
-   const int ntries = pop();
-   unsigned lastStat;
-
-   /* step size is in 2*pi*maxint ... */
-   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
-   #define PSKI      ( * (unsigned volatile *) 0x90081010 )
-   #define PSKQ      ( * (unsigned volatile *) 0x90081014 )
-
-   /* HACK: make sure table is computed... */
-   (void) getPhase(0, 0);
-
-   lastStat = PSKSTAT;
-   for (i=0; i<ntries; i++, mem++) {
-      /* wait for new phase... */
-      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
-
-      /* mark our new phase... */
-      lastStat = PSKSTAT;
-
-      /* wait 1us for cordic to be ready... */
-      halUSleep(1);
-
-      /* get the cordic value */
-      *mem = PSKI; mem++;
-      *mem = PSKQ;
-   }
-   #undef PSKSTAT
-   #undef PSKI
-   #undef PSKQ
-
-   return p;
-}
-
-static inline void setRxOsc(unsigned char phase, unsigned short rate) {
-   *(unsigned volatile *)0x90081008 = 1|(phase<<8)|(rate<<16);
-}
-
-static inline void setTxOsc(unsigned short gain, unsigned short rate) {
-   *(unsigned volatile *)0x90081000 = 1|(gain<<8)|(rate<<16);
-}
-
-static void pskLock(int channel) {
-   unsigned lastStat;
-   int nok = 0;
-   short phase = 0;
-   short minorAdjust = 0;
-   unsigned short rate = 1<<(channel+4);
-   static int offset = 0; /* HACK: cycle offsets */
-   short offsetMask = (3>>(2-channel));
-   
-   /* step size is in 2*pi*maxint ... */
-   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
-   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
-
-   /* HACK: cycle offset gets updated... */
-   offset++; offset|=offsetMask;
-
-   /* setup the oscillator */
-   setRxOsc( (offset<<8)|phase, rate);
-
-   /* HACK: make sure table is computed... */
-   (void) getPhase(0, 0);
-
-   lastStat = PSKSTAT;
-   while (nok<8) {
-      /* wait for new cycle... */
-      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
-
-      /* mark our new phase... */
-      lastStat = PSKSTAT;
-
-      /* wait 1us for cordic to be ready... */
-      halUSleep(1);
-
-      /* is it ok? */
-      {  const short angle = PSKCORDIC;
-         const int angleThreshold = 4; /* 1 part in 64 (too loose?) */
-         const int correction = angle>>8;
-         const int ok = abs(correction) < angleThreshold;
-
-#if 0
-         printf("angle=%hd correction=%hd minor=%hd phase=%hd offset=%hd\r\n", 
-                angle, correction, minorAdjust, phase, offset);
-#endif
-
-         if (ok) {
-            nok++; 
-            minorAdjust += correction;
-         }
-         else {
-            nok=0;
-            minorAdjust = 0;
-            
-            /* adjust angle -- use only top 8 bits of angle... */
-            phase += correction;
-            setRxOsc((offset<<8)|phase, rate);
-               
-            /* wait for another cycle */
-            while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
-
-            /* mark our new phase... */
-            lastStat = PSKSTAT;
-         }
-      }
-   }
-
-   /* make minor adjustment... */
-   phase += minorAdjust>>3;
-   setRxOsc((offset<<8)|phase, rate);
-
-#if 0
-   printf("final phase: %hd\r\n", phase);
-#endif
-
-   #undef PSKSTAT
-   #undef PSKCORDIC
-}
-
-static const char *doPskLock(const char *p) {
-   pskLock(pop());
-   return p;
-}
-
-#if 0
-/* sync to channel ch -- assume a 10101010 pattern
- * already established on ... */
-static void pskSync(int channel) {
-   unsigned lastStat;
-   int nok = 0;
-   short phase = 0;
-   short minorAdjust = 0;
-   unsigned short rate = 1<<(channel+4);
-
-   /* step size is in 2*pi*maxint ... */
-   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
-   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
-
-   /* setup the oscillator */
-   setRxOsc(phase, rate);
-
-   /* HACK: make sure table is computed... */
-   (void) getPhase(0, 0);
-
-   lastStat = PSKSTAT;
-   while (nok<8) {
-      /* wait for new cycle... */
-      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
-
-      /* mark our new phase... */
-      lastStat = PSKSTAT;
-
-      /* wait 1us for cordic to be ready... */
-      halUSleep(1);
-
-      /* is it ok? */
-      {  const short angle = PSKCORDIC;
-         const int angleThreshold = 8; /* 1 part in 32 (too loose) */
-         const int correction = angle>>8;
-         const int ok = abs(correction) < angleThreshold;
-
-         printf("angle=%hd correction=%hd minor=%hd phase=%hd\r\n", 
-                angle, correction, minorAdjust, phase);
-
-         if (ok) {
-            nok++; 
-            minorAdjust += correction;
-         }
-         else {
-            nok=0;
-            minorAdjust = 0;
-   
-            /* adjust angle -- use only top 8 bits of angle... */
-            phase += correction;
-            setRxOsc(phase, rate);
-               
-            /* wait for another cycle */
-            while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
-
-            /* mark our new phase... */
-            lastStat = PSKSTAT;
-         }
-      }
-   }
-
-   /* make minor adjustment... */
-   phase += minorAdjust>>3;
-   setRxOsc(phase, rate);
-   printf("final phase: %hd\r\n", phase);
-
-   #undef PSKSTAT
-   #undef PSKCORDIC
-}
-#endif
-
-/* go into psk echo mode -- never comes out... */
-static int pskEchoMode(int ich, int och, int npackets) {
-   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
-   #define PSKRX     ( * (unsigned volatile *) 0x90081024 )
-   #define PSKTX     ( * (unsigned volatile *) 0x90081038 )
-
-   int lastSend = 0;
-
-   /* phase lock */
-   printf("echo mode phase lock...\r\n");
-   pskLock(0);
-
-   printf("emit carrier...\r\n");
-
-#if 0   
-   /* wait for sync bits msg */
-
-   
-   {  unsigned lastStat = PSKSTAT & 2;
-      int i;
-   
-      for (i=0; i<npackets; i++) {
-         /* wait for something in rx register... */
-         printf("wait tx...\r\n");
-         while ( ((lastStat ^ PSKSTAT)&2) == 0) ;
-
-         /* mark the new status */
-         lastStat = PSKSTAT;
-
-         /* wait for next time slot... */
-         while (lastSend<20*40) {
-            halUSleep(1);
-            lastSend++;
-         }
-         
-         /* copy word... */
-         PSKTX = PSKRX;
-         lastSend = 0;
-         
-         printf("lock...\r\n");
-         pskLock(ich);
-
-         halUSleep(1);
-         lastSend++;
-      }
-   }
-#endif
-
-   return npackets;
-
-   #undef PSKSTAT
-   #undef PSKRX
-   #undef PSKTX
-}
-
-/* start an echo test... */
-static int pskEchoTest(int ich, int channel, int npackets) {
-   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
-   #define PSKRX     ( * (unsigned volatile *) 0x90081024 )
-   #define PSKTX     ( * (unsigned volatile *) 0x90081038 )
-   #define PSKTXSTAT ( * (unsigned volatile *) 0x90081004 )
-
-   unsigned queue[8];
-   const unsigned nq = sizeof(queue)/sizeof(queue[0]);
-   unsigned qh=0, qt=0;
-   int nerrs = 0;
-   int i;
-   unsigned rn = 0;
-   int us = 0;
-   unsigned short rate = 1<<(channel+4);
-
-   /* setup tx osc... */
-   setTxOsc(4, rate);
-
-   /* lock to input... */
-   pskLock(ich);
-   
-   {  unsigned lastStat = PSKSTAT & 2;
-      int nr = 0, nw = 0;
-      unsigned lastBusy = PSKTXSTAT;
-      
-      while (nr<npackets) {
-
-         if (us>1000*3) {
-            printf("psk-echo-test: timeout!\r\n");
-            printf(" nr=%d nw=%d nerrs=%d\r\n", nr, nw, nerrs);
-            printf(" qh=%u qt=%u nq=%u\r\n", qh, qt, nq);
-            printf(" us=%u\r\n", us);
-            printf(" PSKSTAT=%08x PSKTXSTAT=%08x\r\n", PSKSTAT, PSKTXSTAT);
-            return nerrs;
-         }
-         
-         if (lastBusy ^ PSKTXSTAT) {
-            unsigned newBusy = PSKTXSTAT;
-            printf("tx busy change: %d -> %d\n", lastBusy, newBusy);
-            lastBusy = newBusy;
-         }
-
-         /* anything read? ... */
-         if ( ((lastStat ^ PSKSTAT)&2) == 0) {
-            /* no, stuff another packet out if there is room... */
-            if (qh-qt<nq && nw<npackets && us>1000) {
-               queue[qh%nq] = rn = rn*69069+1;
-               qh++;
-               PSKTX = rn;
-               lastBusy = PSKTXSTAT;
-               us = 0;
-               nw++;
-               halUSleep(1000);
-#if 0
-            }
-         }
-         else {
-#endif
-            /* mark the new status */
-            lastStat = PSKSTAT;
-
-            /* mark packet read... */
-            nr++;
-
-            /* check the value returned... */
-            if (qh!=qt) {
-               unsigned v = queue[qt%nq];
-               const unsigned rx = PSKRX;
-               
-               qt++;
-               if (v!=rx) {
-                  printf("error: expected=%08x read=%08x [%08x]\r\n",
-                         v, rx, v^rx);
-                  nerrs++;
-               }
-            }
-            else {
-               printf("error: received a packet, yet no packet was sent!\r\n");
-               nerrs++;
-            }
-         }
-#if 1 
-      }
-#endif
-
-         halUSleep(1);
-         us++;
-      }
-   }
-   
-   return nerrs;
-
-   #undef PSKSTAT
-   #undef PSKRX
-   #undef PSKTX
-   #undef PSKTXSTAT
-}
-
-#endif
-
-static const char *doDumpFlash(const char *p) {
-   osDumpFlash();
-   return p;
-}
-
-static const char *commParams(const char *p) {
-   const int maxclev = pop();
-   const int minclev = pop();
-   const int sdelay = pop();
-   const int rdelay = pop();
-   const int dacmax = pop();
-   const int thresh = pop();
-   
-   hal_FPGA_set_comm_params(thresh, dacmax, rdelay, sdelay, minclev, maxclev);
-
-   return p;
-}
-
-/* returns nibble value or -1 if the 'c' is not
- * a nibble character...
- */
-static int nibble(char c) {
-   if (c>='0' && c<='9') return c - '0';
-   if (c>='a' && c<='f') return c - 'a' + 10;
-   if (c>='A' && c<='F') return c - 'A' + 10;
-   return -1;
-}
-
-/* convert intel hex format to a binary image...
- *
- * return number of checksum errors...
- *
- * FIXME: this is a piece of shit, rewrite it without
- * the stupid state machine (in about 1/4 the lines)...
- */
-static int hextobin(const char *hex, int hsize, unsigned char *img, int ilen) {
-   signed char ck=0, cksum=0;
-   int len = 0;
-   int nb = 0;
-   int offset = 0;
-   int ndata = 0;
-   int type = 0;
-   int addr = 0;
-   int shift = 0;
-   unsigned char data[128];
-   int idx = 0;
-   int ret = 0;
-   enum {
-      ST_START, ST_LEN0, ST_LEN1, /* 0, 1, 2 */
-      ST_ADDR0, ST_ADDR1, ST_ADDR2, ST_ADDR3, /* 3, 4, 5, 6 */
-      ST_TYPE0, ST_TYPE1, /* 7, 8 */
-      ST_DATA, /* 9, 10 */
-      ST_CK0, ST_CK1, /* 11, 12 */
-      ST_OFFSET0, ST_OFFSET1, ST_OFFSET2, ST_OFFSET3 /* 13, 14, 15, 16, 17 */
-   } state = ST_START;
-
-   while (idx<hsize) {
-      const char c = hex[idx]; idx++;
-
-      if (state==ST_START) {
-	 if (c==':') {
-	    ck=0;
-	    cksum=0;
-	    state = ST_LEN0;
-	 }
-      }
-      else if (state==ST_LEN0) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    len = n;
-	    state=ST_LEN1;
-	 }
-      }
-      else if (state==ST_LEN1) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    len<<=4;
-	    len+=n;
-	    cksum=len;
-	    addr = 0;
-	    state=ST_ADDR0;
-	 }
-      }
-      else if (state==ST_ADDR0) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    addr = n;
-	    state = ST_ADDR1;
-	 }
-      }
-      else if (state==ST_ADDR1) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    addr <<= 4;
-	    addr += n;
-	    cksum += addr;
-	    state = ST_ADDR2;
-	 }
-      }
-      else if (state==ST_ADDR2) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    addr <<= 4;
-	    addr += n;
-	    state = ST_ADDR3;
-	 }
-      }
-      else if (state==ST_ADDR3) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    addr <<= 4;
-	    addr += n;
-	    cksum+= (addr&0xff);
-	    type = 0;
-	    state = ST_TYPE0;
-	 }
-      }
-      else if (state==ST_TYPE0) {
-	 int n = nibble(c);
-	 if (n==0) {
-	    state = ST_TYPE1;
-	 }
-      }
-      else if (state==ST_TYPE1) {
-	 int n = nibble(c);
-	 if (n==0) {
-	    ndata = 0;
-	    nb = 0;
-	    state = ST_DATA;
-	 }
-	 else if (n==1) {
-	    /* last record! */
-	    cksum += 1;
-	    state = ST_CK0;
-	 }
-	 else if (n==2) {
-	    offset = 0;
-	    cksum += 2;
-	    shift = 4;
-	    state = ST_OFFSET0;
-	 }
-	 else if (n==4) {
-	    offset = 0;
-	    cksum += 4;
-	    shift = 16;
-	    state = ST_OFFSET0;
-	 }
-      }
-      else if (state==ST_OFFSET0) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    offset = n;
-	    state = ST_OFFSET1;
-	 }
-      }
-      else if (state==ST_OFFSET1) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    offset<<=4;
-	    offset += n;
-	    cksum += offset;
-	    state = ST_OFFSET2;
-	 }
-      }
-      else if (state==ST_OFFSET2) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    offset <<= 4;
-	    offset += n;
-	    state = ST_OFFSET3;
-	 }
-      }
-      else if (state==ST_OFFSET3) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    offset <<= 4;
-	    offset += n;
-	    ck = 0;
-	    cksum += (offset&0xff);
-	    offset <<= shift;
-	    state = ST_CK0;
-	 }
-      }
-      else if (state==ST_DATA) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    if (nb==0) {
-	       data[ndata] = n;
-	       nb++;
-	    }
-	    else {
-	       data[ndata]<<=4;
-	       data[ndata]+=n;
-	       cksum+=data[ndata];
-	       ndata++;
-	       if (ndata==len) {
-		  ck = 0;
-		  state = ST_CK0;
-
-                  /* FIXME: check for overflow... */
-                  memcpy(img + offset + addr, data, ndata);
-	       }
-	       nb=0;
-	    }
-	 }
-      }
-      else if (state==ST_CK0) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    ck = n;
-	    state = ST_CK1;
-	 }
-      }
-      else if (state==ST_CK1) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    ck <<= 4;
-	    ck += n;
-            cksum += ck;
-            
-            if ( cksum != 0 ) ret++;
-            
-            cksum = 0;
-            state = ST_START;
-	 }
-      }
-   }
-
-   return ret;
-}
-
-static const char *hexToBinCmd(const char *p) {
-   const int imglen = pop();
-   unsigned char *img = (unsigned char *) pop();
-   const int hexlen = pop();
-   const char *hex = (const char *) pop();
-   push(hextobin(hex, hexlen, img, imglen));
    return p;
 }
 
@@ -3282,7 +1486,6 @@ int main(int argc, char *argv[]) {
   const int linesz = 256;
   static int rawCurrents = 1;
   static int disableCurrents = 1;
-  extern int flashBurnImage(int imgint, int wlen);
 
   static struct {
     const char *nm;
@@ -3306,25 +1509,16 @@ int main(int argc, char *argv[]) {
      { "\\", comment },
      { "drop", drop },
      { "dup", sdup },
-     { "over", over },
      { "ymodem1k", ymodem1k },
-     { "ry", ry },
-     { "sy", sy },
      { "allocate", memallocate },
      { "free", memfree },
      { "icopy", icopy },
-     { "iset", iset },
      { "?DO", doloop },
      { "writeDAC", writeDAC },
      { "usleep", udelay },
      { "od", odump },
-     { "odt", odumpt },
-     { "reboot", rebootDOM },
-     { "md5sum", md5sum },
-     { "boot-serial", serialReboot },
-     { "boot-flash", flashReboot },
+     { "reboot", reboot },
      { "analogMuxInput", analogMuxInput },
-     { "disableAnalogMux", disableAnalogMux },
      { "prtTemp", prtTemp },
      { "swicmd", swicmd },
      { "s\"", squote },
@@ -3338,8 +1532,8 @@ int main(int argc, char *argv[]) {
      { "invalidateICache", invalidateICache },
      { "exec", execBin },
      { "find", find },
+     { "compress", zcompress },
      { "gunzip", gunzip },
-     { "gzip", gzip },
      { "ls",  doFisList },
      { "rm", doFisRm },
      { "lock", doFisLock },
@@ -3355,64 +1549,6 @@ int main(int argc, char *argv[]) {
      { "cp", memcp },
      { "install", doInstall },
      { "fpga-versions", fpgaVersions },
-     { "pld-versions", pldVersions },
-     { "boot-req", reqBoot },
-     { "begin", begin },
-     { "acq-forced" , acq_cpu },
-     { "acq-disc" , acq_disc },
-     { "acq-pp" , acq_pp },
-     { "acq-led", acq_led },
-     { "zd"	, zdump },
-     { "enableLED", enableLED },
-     { "disableLED", disableLED },
-     { "setLEDdelay", setLEDdelay },
-     { "enableFB", enableFB},
-     { "enableFBmin", enableFBmin},
-     { "disableFB", disableFB },
-     { "fbid", fbid },
-     { "setFBbrightness", setFBbrightness },
-     { "setFBwidth", setFBwidth },
-     { "setFBenables", setFBenables },
-     { "setFBmux", setFBmux },
-     { "startFBflashing", startFBflashing },
-     { "stopFBflashing", stopFBflashing },
-     { "setFBdcdc", setFBdcdc },
-     { "setFBrate", setFBrate },
-#if defined(PSKHACK)
-     { "scan-angles", scanAngles },
-     { "dump-cordic", dumpCordic },
-     { "dump-iq", dumpIQ },
-     { "psk-lock", doPskLock },
-#endif
-     { "dump-flash", doDumpFlash },
-     { "comm-params", commParams },
-     { "hex-to-bin", hexToBinCmd },
-     { "read-bin", readBin },
-     { "release", release },
-     { "fis-gc", doFisGC },
-     /* Begin AURA/radio stuff */
-     {"rr",radio_r},
-     {"rw",radio_w},
-     {"rwloop",radio_w_loop},
-     {"radio_readDAC",radio_readDAC},
-     {"radio_readScaler",radio_readScaler},
-     {"radio_fifo",radio_fifo},
-     {"ref2mb",reflection2mb},
-     {"Radio_reflection",reflection},
-     {"mb_reflection",mbreflection},
-     {"RRRF",read_reflection},
-     {"ratwd_time",radio_atwd_time},
-     {"ratwd_parse",radio_atwd_parse},
-     {"writev",write_v},
-     {"readv",read_v},
-     {"radioStat",radio_stat},
-     {"forcedtrig",forced_trig},
-     {"radiotrig",radio_trig},
-     {"TracrTime",Radio_TCal},
-     {"bd",bdumpi},
-     {"dumpscaler",radio_dumpscaler},
-     {"enableFBminY", enableFBminY},
-     /* End AURA/radio stuff */
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -3426,11 +1562,7 @@ int main(int argc, char *argv[]) {
      { "readTemp", readTemp },
      { "i", loopCount },
      { "readBaseDAC", readBaseDAC },
-     { "readBaseADC", readBaseADC },         
-     { "readPressure", readPressure },
-     { "getFBfw", getFBfw },
-     { "getFBhw", getFBhw },
-     { "getFBdcdc", getFBdcdc },
+     { "readBaseADC", readBaseADC },
   };
   const int nInitCFuncs0 = sizeof(initCFuncs0)/sizeof(initCFuncs0[0]);
 
@@ -3469,11 +1601,10 @@ int main(int argc, char *argv[]) {
     { "swap", swap },
     { "fpga", do_fpga_config },
     { "interpret", interpret },
-    { "fb-cpld", do_fb_cpld_config },
-    { "install-image", flashBurnImage },
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
 
+#if 0
   static struct {
     const char *nm;
     CFunc3 cf;
@@ -3481,13 +1612,10 @@ int main(int argc, char *argv[]) {
      /* don't forget to document these commands
       * at the top of this file!
       */
-    { "ieq", ieq },
-#if defined(PSKHACK)
-    { "psk-echo-mode", pskEchoMode },
-    { "psk-echo-test", pskEchoTest },
-#endif
+    { "flashBurn", flashBurn },
   };
   const int nInitCFuncs3 = sizeof(initCFuncs3)/sizeof(initCFuncs3[0]);
+#endif
 
   static struct {
     const char *nm;
@@ -3502,10 +1630,11 @@ int main(int argc, char *argv[]) {
      { "blperr", (int) &blperr },
      { "rawCurrents", (int) &rawCurrents },
      { "disableCurrents", (int) &disableCurrents },
+     { "build", ICESOFT_BUILD },
   };
   const int nInitConstants = sizeof(initConstants)/sizeof(initConstants[0]);
 
-  int li = 0, ei = 0, i;
+  int li = 0, ei = 0, done = 0, i;
   extern void initMemTests(void);
   char *lines[32];
   int hl = 0, bl = -1;
@@ -3513,6 +1642,8 @@ int main(int argc, char *argv[]) {
   int escaped = 0;
   int err;
 
+  osInit(argc, argv);
+ 
   if ((stack = (int *) memalloc(sizeof(int) * stacklen))==NULL) {
     printf("can't allocate stack...\n");
     return 1;
@@ -3537,37 +1668,50 @@ int main(int argc, char *argv[]) {
   for (i=0; i<nInitCFuncs2; i++) 
     addCFunc2Bucket(initCFuncs2[i].nm, initCFuncs2[i].cf);
 
+#if 0
   for (i=0; i<nInitCFuncs3; i++) 
     addCFunc3Bucket(initCFuncs3[i].nm, initCFuncs3[i].cf);
+#endif
 
   for (i=0; i<nInitConstants; i++) 
     addConstantBucket(initConstants[i].nm, initConstants[i].constant);
 
-  /* os specific initializations... */
-  osInit(argc, argv);
-
   initMemTests();
 
-  if ((err=setjmp(jenv))!=0) {
-     printf("In startup.fs: ");
-     prtErr(err);
-  }
-  else sourceStartup();
+  sourceStartup();
 
-  printf(" Iceboot (%s) build %s.....\r\n",  versions.tag, versions.build);
+  printf(" Iceboot (%s) build %s.....\r\n", STRING(PROJECT_TAG),
+	 STRING(ICESOFT_BUILD));
 
   line = (char *) memalloc(linesz);
 
   if ((err=setjmp(jenv))!=0) {
-     prtErr(err);
+     if (err==EXC_STACK_UNDERFLOW) {
+	printf("Error: stack underflow\r\n");
+     }
+     else if (err==EXC_STACK_OVERFLOW) {
+	printf("Error: stack overflow\r\n");
+     }
+     else {
+	printf("Error: unknown!\r\n");
+     }
+
      /* reset parsed line... */
      escaped = 0;
      ei = 0;
      li = 0;
   }
 
-  soPuts("\r\n> ");
-  while (1) {
+  write(1, "\r\n> ", 4);
+  while (!done) {
+    int nr;
+    char c;
+
+    if (ei==linesz) {
+      printf("!!!! line too long!!!\r\n");
+      break;
+    }
+
     /* check for input, if there is none some
      * amount of time (500ms?) then update the currents
      * on the top bar...
@@ -3592,233 +1736,226 @@ int main(int argc, char *argv[]) {
 	  if (!isInputData()) prtCurrents(rawCurrents);
 	  
 	  /* set normal video, reset the current cursor location */
-	  printf("%c[m%c8", 27, 27); 
-	  fflush(stdout);
+	  printf("%c[m%c8", 27, 27); fflush(stdout);
        }
     }
+    
+    /* read the next value...
+     */
+    nr = read(0, &c, 1);
+    
+    if (nr<=0) {
+       printf("!!!! can't read from stdin!!!!\r\n");
+       continue;
+    }
 
-    /* always flush before reading... */
-    soFlush();
-    {  const int buflen = 4096;
-       char buf[buflen];
-       int nr = read(0, buf, sizeof(buf));
-       int idx;
-
-       if (nr<=0) {
-	  printf("!!!! can't read from stdin!!!!\r\n");
+#if 0
+    if (nr==1) {
+       printf("\r\n[%d] 0x%02x\r\n", escaped, c);
+    }
+#endif
+    
+    
+    if (escaped) {
+       char mv[8];
+       int lineflip = 0;
+       
+       if (c=='A') {
+	  /* up arrow... */
+	  if (bl<hl-1 && bl<nl) {
+	     bl++;
+	     lineflip = 1;
+	  }
+       }
+       else if (c=='B') {
+	  /* down... */
+	  if (bl>0) {
+	     bl--;
+	     lineflip = 1;
+	  }
+       }
+       else if (c=='C') {
+	  /* right... */
+	  if (li<ei) {
+	     sprintf(mv, "%c[C", 27);
+	     write(1, mv, strlen(mv));
+	     li++;
+	  }
+       }
+       else if (c=='D') {
+	  /* left... */
+	  if (li>0) {
+	     sprintf(mv, "%c[D", 27);
+	     write(1, mv, strlen(mv));
+	     li--;
+	  }
+       }
+       else if (c=='O') {
+	  escaped = 1;
+	  continue;
+       }
+       else if (c=='[') {
+	  escaped = 1;
 	  continue;
        }
 
-       for (idx=0; idx<nr; idx++) {
-	  char c = buf[idx];
-	  
-#if 0
-	  printf("\r\n[%d] 0x%02x\r\n", escaped, c);
-#endif
-	  
-	  /* FIXME: why do we get a '0' on epxa4??? */
-	  if (c == 0) continue;
+       if (lineflip) {
+	  const int idx = (hl - bl - 1)%nl;
+	  char cmd[8];
+
+	  /* move to beginning of line...
+	   */
+	  sprintf(cmd, "%c[D", 27);
+	  while (li>0) {
+	     write(1, cmd, strlen(cmd));
+	     li--;
+	  }
+
+	  /* clear to end of line
+	   */
+	  sprintf(cmd, "%c[K", 27);
+	  write(1, cmd, strlen(cmd));
+
+	  /* add the line...
+	   */
+	  strcpy(line, lines[idx]);
+	  li = strlen(line);
+	  ei = strlen(line);
+
+	  /* write the line...
+	   */
+	  write(1, line, strlen(line));
+       }
+       
+       escaped = 0;
+       continue;
+    }
     
-	  if (escaped) {
-	     char mv[8];
-	     int lineflip = 0;
-	     
-	     if (c=='A') {
-		/* up arrow... */
-		if (bl<hl-1 && bl<nl) {
-		   bl++;
-		   lineflip = 1;
-		}
-	     }
-	     else if (c=='B') {
-		/* down... */
-		if (bl>0) {
-		   bl--;
-		   lineflip = 1;
-		}
-	     }
-	     else if (c=='C') {
-		/* right... */
-		if (li<ei) {
-		   sprintf(mv, "%c[C", 27);
-		   soPuts(mv);
-		   li++;
-		}
-	     }
-	     else if (c=='D') {
-		/* left... */
-		if (li>0) {
-		   sprintf(mv, "%c[D", 27);
-		   soPuts(mv);
-		   li--;
-		}
-	     }
-	     else if (c=='O') {
-		escaped = 1;
-		continue;
-	     }
-	     else if (c=='[') {
-		escaped = 1;
-		continue;
-	     }
-	     
-	     if (lineflip) {
-		const int idx = (hl - bl - 1)%nl;
-		char cmd[8];
-		
-		/* move to beginning of line...
-		 */
-		sprintf(cmd, "%c[D", 27);
-		while (li>0) {
-		   soPuts(cmd);
-		   li--;
-		}
-		
-		/* clear to end of line
-		 */
-		sprintf(cmd, "%c[K", 27);
-		soPuts(cmd);
-		
-		/* add the line...
-		 */
-		strcpy(line, lines[idx]);
-		li = strlen(line);
-		ei = strlen(line);
-		
-		/* write the line...
-		 */
-		soPuts(line);
-	     }
-	     
-	     escaped = 0;
-	     continue;
-	  }
-	  
-	  if (c==27) { 
-	     /* esc character...
-	      */
-	     escaped = 1;
-	  }
-	  else if (c==0x06) {
-	     int snw = 0;
-	     char mv[16];
-	     
-	     /* ^F forward word: skip whitespace until non-whitespace skip
-	      * non whitespace until space or end of line
-	      */
-	     while (1) {
-		if (li<ei) {
-		   if (!snw) snw = !isspace(line[li]);
-		   sprintf(mv, "%c[C", 27);
-		   soPuts(mv);
-		   li++;
-		   
-		   if (snw && li<ei && isspace(line[li])) break;
-		}
-		else break;
-	     }
-	  }
-	  else if (c==0x02) {
-	     int snw = 0;
-	     char mv[16];
-	     
-	     /* ^B back word: skip whitespace backwards, 
-	      * skip non-whitespace backwards until whitespace 
-	      * is previous
-	      */
-	     while (1) {
-		if (li>0) {
-		   sprintf(mv, "%c[D", 27);
-		   soPuts(mv);
-		   li--;
-		   
-		   if (!snw) snw = !isspace(line[li]);
-		   
-		   if (snw && li>0 && isspace(line[li-1])) break;
-		}
-		else break;
-	     }
-	  }
-	  else if (c=='\b' || c==0x7f) {
-	     if (li>0) {
-		char cmd[8];
-
-		sprintf(cmd, "%c%c[K", '\b', 27);
-		soPuts(cmd);
-		
-		if (li<ei) {
-		   /* we need to write the rest...
-		    */
-		   sprintf(cmd, "%c7", 27);
-		   soPuts(cmd);
-		   soPutm(line+li, (ei-li));
-		   sprintf(cmd, "%c8", 27);
-		   soPuts(cmd);
-		   memmove(line+li-1, line+li, ei-li);
-		}
-		li--;
-		ei--;
-	     }
-	  }
-	  else if (c=='\r') {
-	     /* we need to flush on '\r' so things
-	      * come out in the right order...
-	      */
-	     soPuts("\r\n");
-	     soFlush();
-
-	     line[ei] = 0;
-
-	     /* before we parse the line, we save it in a ring buffer...
-	      */
-	     if (ei>0) {
-		if (hl>=nl) free(lines[hl%nl]);
-		
-		lines[hl%nl] = strdup(line);
-		hl++;
-		
-		if (newLine(line)) {
-		   printf("!!! error new line\r\n");
-		}
-	     }
-	     
-	     bl = -1;
-	     li = ei = 0;
-	     soPuts("> ");
-	  }
-	  else {
-	     /* make space for character...
-	      */
-	     if (li<ei) memmove(line+li+1, line+li, ei-li);
-	     
-	     /* insert character...
-	      */
-	     line[li] = c;
-	     
-	     soPutc(c);
-	     
-	     ei++;
+    if (c==27) { 
+       /* esc character...
+	*/
+       escaped = 1;
+    }
+    else if (c==0x06) {
+       int snw = 0;
+       char mv[16];
+       
+       /* ^F forward word: skip whitespace until non-whitespace skip
+        * non whitespace until space or end of line
+        */
+       while (1) {
+	  if (li<ei) {
+	     if (!snw) snw = !isspace(line[li]);
+	     sprintf(mv, "%c[C", 27);
+	     write(1, mv, strlen(mv));
 	     li++;
-	     
-	     if (li<ei) {
-		char ec[4];
-		
-		/* we need to write the rest...
-		 */
-		sprintf(ec, "%c7", 27);
-		soPuts(ec);
-		soPutm(line+li, (ei-li));
-		sprintf(ec, "%c8", 27);
-		soPuts(ec);
-	     }
+
+	     if (snw && li<ei && isspace(line[li])) break;
+	  }
+	  else break;
+       }
+    }
+    else if (c==0x02) {
+       int snw = 0;
+       char mv[16];
+       
+       /* ^B back word: skip whitespace backwards, 
+	* skip non-whitespace backwards until whitespace 
+	* is previous
+	*/
+       while (1) {
+	  if (li>0) {
+	     sprintf(mv, "%c[D", 27);
+	     write(1, mv, strlen(mv));
+	     li--;
+
+	     if (!snw) snw = !isspace(line[li]);
+
+	     if (snw && li>0 && isspace(line[li-1])) break;
+	  }
+	  else break;
+       }
+    }
+    else if (c=='\b' || c==0x7f) {
+       if (li>0) {
+	  char cmd[8];
+	  sprintf(cmd, "%c%c[K", '\b', 27);
+	  write(1, cmd, strlen(cmd));
+
+	  if (li<ei) {
+	     /* we need to write the rest...
+	      */
+	     sprintf(cmd, "%c7", 27);
+	     write(1, cmd, 2);
+	     write(1, line+li, (ei-li));
+	     sprintf(cmd, "%c8", 27);
+	     write(1, cmd, 2);
+	  
+	     memmove(line+li-1, line+li, ei-li);
+	  }
+	  li--;
+	  ei--;
+       }
+    }
+    else if (c=='\r') {
+       write(1, "\r\n", 2);
+       line[ei] = 0;
+       
+       /* before we parse the line, we save it in a ring buffer...
+	*/
+       if (ei>0) {
+	  if (hl>=nl) free(lines[hl%nl]);
+       
+	  lines[hl%nl] = strdup(line);
+	  hl++;
+       
+	  if (newLine(line)) {
+	     printf("!!! error new line\r\n");
+	     done = 1;
+	     break;
 	  }
        }
-       soFlush();
+       
+       bl = -1;
+       li = ei = 0;
+       
+       /* echo new line...
+	*/
+       write(1, "> ", 2);
+    }
+    else {
+       /* make space for character...
+	*/
+       if (li<ei) memmove(line+li+1, line+li, ei-li);
+       
+       /* insert character...
+	*/
+       line[li] = c;
+
+       /* echo character...
+	*/
+       write(1, &c, 1);
+
+       ei++;
+       li++;
+
+       if (li<ei) {
+	  char ec[4];
+	  
+	  /* we need to write the rest...
+	   */
+	  sprintf(ec, "%c7", 27);
+	  write(1, ec, 2);
+	  write(1, line+li, (ei-li));
+	  sprintf(ec, "%c8", 27);
+	  write(1, ec, 2);
+       }
     }
   }
+
   return 0;
 }
-  
+
 static const char *udelay(const char *p) {
    halUSleep(pop());
    return p;
@@ -3860,3 +1997,4 @@ static const char *writeDAC(const char *p) {
    halWriteDAC(channel, value);
    return p;
 }
+
