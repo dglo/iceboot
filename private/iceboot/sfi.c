@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.116.2.1 $
+ * $Revision: 1.116.2.2 $
  * $Author: arthur $
- * $Date: 2004-11-24 19:48:19 $
+ * $Date: 2005-03-15 22:56:41 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1018,8 +1018,8 @@ static const char *setLEDdelay(const char *p) {
 }
 
 static const char *enableFB(const char *p) {
-    int err, config_t, valid_t;    
-    err = hal_FB_enable(&config_t, &valid_t);
+    int err, config_t, valid_t, reset_t;    
+    err = hal_FB_enable(&config_t, &valid_t, &reset_t);
     if (err != 0) {
         switch(err) {
         case FB_HAL_ERR_CONFIG_TIME:
@@ -1028,11 +1028,15 @@ static const char *enableFB(const char *p) {
         case FB_HAL_ERR_VALID_TIME:
             printf("Error: flasherboard clock validation time too long\r\n");
             break;
+        case FB_HAL_ERR_RESET_TIME:
+            printf("Error: flasherboard power-on reset time too long\r\n");
+            break;
         default:
             printf("Error: unknown flasherboard enable failure\r\n");
             break;
         }
     }
+    push(reset_t);
     push(valid_t);
     push(config_t);
     push(err);
