@@ -8,18 +8,14 @@
 \
 0 850 writeDAC
 1 2097 writeDAC
-2 600 writeDAC
+2 3000 writeDAC
 3 2048 writeDAC
 4 850 writeDAC
 5 2097 writeDAC
-6 600 writeDAC
+6 3000 writeDAC
 7 1925 writeDAC
 9 500 writeDAC
-10 700 writeDAC
-12 1023 writeDAC
-13 800 writeDAC
-14 1023 writeDAC
-15 1023 writeDAC
+12 500 writeDAC
 
 \
 \ run stf server...
