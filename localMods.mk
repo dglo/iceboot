@@ -8,3 +8,5 @@ ifeq ("epxa10","$(strip $(PLATFORM))")
   TO_BE_CLEANED += $(EPXA10_BINS)
   vpath %.S ../dom-loader/$(PLATFORM_PUB_ROOT)/booter
 endif
+
+LOAD_LIBS := $(filter-out -ldom-fpga, $(LOAD_LIBS))
