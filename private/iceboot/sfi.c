@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.70.2.1 $
+ * $Revision: 1.70.2.2 $
  * $Author: arthur $
- * $Date: 2003-07-30 20:09:15 $
+ * $Date: 2003-08-01 01:07:57 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1573,6 +1573,7 @@ int main(int argc, char *argv[]) {
      { "readTemp", readTemp },
      { "i", loopCount },
      { "readBaseDAC", readBaseDAC },
+     { "readBaseADC", readBaseADC },
   };
   const int nInitCFuncs0 = sizeof(initCFuncs0)/sizeof(initCFuncs0[0]);
 
