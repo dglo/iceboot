@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.69.2.1 $
- * $Author: patton $
- * $Date: 2003-07-15 18:47:01 $
+ * $Revision: 1.70 $
+ * $Author: arthur $
+ * $Date: 2003-07-15 18:41:09 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -755,6 +755,16 @@ static const char *sendMsg(const char *p) {
 static int readDAC(int channel) { return halReadDAC(channel); }
 static int readADC(int adc) { return halReadADC(adc); }
 static int readBaseADC(void) { return halReadBaseADC(); }
+
+static const char *reqBoot(const char *p) {
+  /* request reboot from DOR */
+  if (halIsFPGALoaded()) {
+     hal_FPGA_TEST_request_reboot();
+     while (!hal_FPGA_TEST_is_reboot_granted()) ;
+  }
+  
+  return p;
+}
 
 /* copy integers from one location to another...
  * 
@@ -1549,6 +1559,7 @@ int main(int argc, char *argv[]) {
      { "cp", memcp },
      { "install", doInstall },
      { "fpga-versions", fpgaVersions },
+     { "boot-req", reqBoot },
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -1562,7 +1573,6 @@ int main(int argc, char *argv[]) {
      { "readTemp", readTemp },
      { "i", loopCount },
      { "readBaseDAC", readBaseDAC },
-     { "readBaseADC", readBaseADC },
   };
   const int nInitCFuncs0 = sizeof(initCFuncs0)/sizeof(initCFuncs0[0]);
 

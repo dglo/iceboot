@@ -16,7 +16,7 @@
 
 /* block size in 16 bit words 
  */
-static int blkSize(int blk) { return (blk<8) ? 4 : 32; }
+static int blkSize(int blk) { return (blk<8) ? 4*1024 : 32*1024; }
 
 /* convert address to chip...
  */

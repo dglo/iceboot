@@ -22,6 +22,6 @@ nfis.c: ../../epxa10/iceboot/fis.c
 nfis.o: nfis.c fis.h $(EPXAH)
 
 $(ICEBOOTBIN): $(SFIOBJS) $(LIBHAL)
-	$(CC) -o $(ICEBOOTBIN) $(SFIOBJS) $(LIBHAL) $(SYSLIBS)
+	$(CC) -g -o $(ICEBOOTBIN) $(SFIOBJS) $(LIBHAL) $(SYSLIBS)
 
 

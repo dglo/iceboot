@@ -42,9 +42,7 @@ $9008103c constant comrx
 
 $50000000 constant CPLD
 
-s" iceboot.sbi" find if fpga drop endif
-
-$00a04800 comctl !
+s" iceboot.sbi" find if fpga drop $00a04800 comctl ! endif
 
 : yorn if s" yes" else s" no" endif type crlf type ;
 

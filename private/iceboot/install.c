@@ -28,6 +28,8 @@ enum states {
    ST_OFFSET0, ST_OFFSET1, ST_OFFSET2, ST_OFFSET3 /* 13, 14, 15, 16, 17 */
 };
 
+static int nerrors = 0;
+
 int flashInstall(void) {
    void *fs, *fe;
    int nretries;
@@ -44,7 +46,9 @@ int flashInstall(void) {
    unsigned char data[256];
    int i;
    unsigned chip_start[2], chip_end[2];
-   
+
+   nerrors = 0;
+
    /* verify...
     */
    while (1) { 
@@ -74,7 +78,7 @@ int flashInstall(void) {
    chip_end[1] = (unsigned) fe;
 
    for (i=0; i<2; i++) {
-      /* unlock all data -- except for iceboot (first 7 * 64K bytes)...
+      /* unlock all data
        */
       printf("chip %d: unlock... ", i); fflush(stdout);
       if (flash_unlock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
@@ -116,12 +120,6 @@ int flashInstall(void) {
 
       for (i=0; i<nr; i++) {
 	 char c = line[i];
-
-#if 0
-	 printf("c, state, nr, cksum: 0x%02x %d, %d, 0x%02x\r\n", 
-		c, state, nr, cksum);
-	 fflush(stdout);
-#endif
 
 	 if (state==ST_START) {
 	    if (c==':') {
@@ -293,12 +291,10 @@ int flashInstall(void) {
 	    if (n>=0) {
 	       ck <<= 4;
 	       ck += n;
-	       /* FIXME: compare to calculated value... */
 
-#if 0
-	       printf("ck: 0x%02x, cksum: 0x%02x\r\n", 
-		      ck, 0x100 - (cksum&0xff));
-#endif
+	       /* FIXME: compare to calculated value... */
+	       if (ck!=0x100 - (cksum&0xff)) nerrors++;
+
 	       if (allDone) break;
 	       else {
 		  cksum = 0;
@@ -310,18 +306,33 @@ int flashInstall(void) {
    }
 
    for (i=0; i<2; i++) {
-      /* unlock all data -- except for iceboot (first 7 * 64K bytes)...
-       */
       printf("chip %d: lock... ", i); fflush(stdout);
-      if (flash_unlock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
-	 printf("unable to unlock %08x -> %08x\r\n", 
+      if (flash_lock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to lock %08x -> %08x\r\n", 
 		chip_start[i], chip_end[i]);
       }
       printf("\r\n");
    }
 
+   if (nerrors) {
+      printf("%d checksum ERRORS detected!!!\r\n", nerrors);
+   }
+
    return 0;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

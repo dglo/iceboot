@@ -1,4 +1,7 @@
 /* simulated flash driver...
+ *
+ * we try to emulate the intel flash chips
+ * with an anonymous memory block...
  */
 #include <stddef.h>
 #include <string.h>
@@ -16,59 +19,82 @@
 #define FVERBOSE
 #undef FVERBOSE
 
-/* block size in bytes
+/* block size in 16 bit kwords 
  */
-static int blkSize(void) { 
-   static int pgsz = -1;
-   if (pgsz==-1) pgsz = getpagesize();
-   return pgsz;
-}
+static int blkSize(int blk) { return (blk<8) ? 4*2*1024 : 32*2*1024; }
 
 static char *flash_start;
+static char *flash1_start;
 static char *flash_end;
 
-/* emulate the chips on the dom...
+/* convert address to chip...
  */
 static int addrtochip(const void *a) {
-   const char *addr = (const char *) a;
-   if (addr>=flash_start && addr<=flash_end-1) return 0;
+   const short *addr = (const short *) a;
+   const short *fs0 = (const short *) flash_start;
+   const short *fe0 = (const short *) (flash1_start-2);
+   const short *fs1 = (const short *) flash1_start;
+   const short *fe1 = (const short *) flash_end;
+
+   if (addr>=fs0 && addr<=fe0)      { return 0; }
+   else if (addr>=fs1 && addr<=fe1) { return 1; }
    return -1;
 }
 
 /* convert address to block location...
  */
 static int addrtoblock(const void *a) {
-   const char *addr = (const char *) a;
-   const char *fs0 = (const char *) flash_start;
-   int idx;
+   const short *addr = (const short *) a;
+   const short *fs0 = (const short *) flash_start;
+   const short *fs1 = (const short *) flash1_start;
    const int chip = addrtochip(a);
-   if (chip==0 || chip==1) idx = addr - fs0;
-   else return -1;
-   return idx/blkSize();
+   int idx, bblk;
+   if (chip==0)      { idx = addr - fs0; }
+   else if (chip==1) { idx = addr - fs1; }
+   else { return -1; }
+   bblk = idx/(32*1024);
+   return (bblk==0) ? (idx/(4*1024)) : (bblk + 7);
+}
+
+/* turn chip/blk -> addr
+ */
+static void *blktoaddr(int chip, int blk) {
+   short *fs0 = (short *) flash_start;
+   short *fs1 = (short *) flash1_start;
+   short *addr;
+   
+   if (chip==0)      { addr = fs0; }
+   else if (chip==1) { addr = fs1; }
+   else { return NULL; }
+
+   return addr + ( (blk<8) ? (blk*4*1024) : ( (blk-7)*32*1024) );
 }
 
 /* lock against writes...
  */
 int flash_lock(const void *from, int bytes) {
    const void *to = (const char *)from + bytes - 2;
-   const int sblk = addrtoblock(from);
+   int sblk = addrtoblock(from);
    const int eblk = addrtoblock(to);
    const int chip = addrtochip(from);
-   char *addr;
-   
-   if (chip<0 || sblk<0 || eblk<0 || eblk<sblk) return FEINVALID;
-
-   if (chip!=addrtochip(to)) return FEINVALID;
 
 #if defined(FVERBOSE)
    printf("flash_lock: %p for %d bytes\r\n", from, bytes);
    printf("  sblk, eblk, chip: %d %d %d [%d]\r\n", sblk, eblk, chip,
 	  addrtochip(to));
 #endif
-   addr = flash_start + sblk*blkSize();
-   if (mprotect(addr, (eblk-sblk+1)*blkSize(), PROT_READ)<0) {
-      perror("flash_lock");
-      return 1;
+   
+   if (chip<0 || sblk<0 || eblk<0 || eblk<sblk) return FEINVALID;
+
+   if (chip!=addrtochip(to)) return FEINVALID;
+
+   while (sblk<=eblk) {
+      void *addr = blktoaddr(chip, sblk);
+      if (mprotect(addr, blkSize(sblk), PROT_READ)<0) {
+	 perror("flash_lock");
+	 return 1;
+      }
+      sblk++;
    }
    return 0;
 }
@@ -77,36 +103,48 @@ int flash_lock(const void *from, int bytes) {
  */
 int flash_unlock(const void *from, int bytes) {
    const void *to = (const char *)from + bytes - 2;
-   const int sblk = addrtoblock(from);
+   int sblk = addrtoblock(from);
    const int eblk = addrtoblock(to);
    const int chip = addrtochip(from);
-   char *addr;
    
-   if (chip<0 || sblk<0 || eblk<0 || eblk<sblk) return FEINVALID;
-
-   if (chip!=addrtochip(to)) return FEINVALID;
-
 #if defined(FVERBOSE)
    printf("flash_unlock: %p for %d bytes\r\n", from, bytes);
    printf("  sblk, eblk, chip: %d %d %d [%d]\r\n", sblk, eblk, chip,
 	  addrtochip(to));
 #endif
-   addr = flash_start + sblk*blkSize();
-   if (mprotect(addr, (eblk-sblk+1)*blkSize(), PROT_READ|PROT_WRITE)<0) {
-      perror("flash_unlock");
-      return 1;
+   if (chip<0 || sblk<0 || eblk<0 || eblk<sblk) return FEINVALID;
+
+   if (chip!=addrtochip(to)) return FEINVALID;
+
+   while (sblk<=eblk) {
+      void *addr = blktoaddr(chip, sblk);
+      if (mprotect(addr, blkSize(sblk), PROT_READ|PROT_WRITE)<0) {
+	 perror("flash_unlock");
+	 return 1;
+      }
+      sblk++;
    }
    return 0;
 }
 
-/* write cnt words of mem to to */
+/* write cnt bytes of mem to to */
 int flash_write(void *to, const void *mem, int cnt) {
-   if (to<(void *)flash_start || to>=(void *)flash_end) {
-      printf("invalid flash address %p [%p -> %p]\r\n", 
-	     to, flash_start, flash_end);
-      return 1;
-   }
+   const int sblk = addrtoblock(to);
+   const int eblk = addrtoblock((const char *)to+cnt-2);
+   const int chip = addrtochip(to);
+   
+#if defined(FVERBOSE)
+   printf("flash_write: %p for %d bytes from %p\r\n", to, cnt, mem);
+   printf("  sblk, eblk, chip: %d %d %d [%d]\r\n", sblk, eblk, chip,
+	  addrtochip(to));
+#endif
+
+   if (chip<0 || sblk<0 || eblk<0 || eblk<sblk) return FEINVALID;
+
+   if (chip!=addrtochip((const char *)to + cnt - 2)) return FEINVALID;
+
    memcpy(to, mem, cnt);
+
    return 0;
 }
 
@@ -114,10 +152,9 @@ int flash_write(void *to, const void *mem, int cnt) {
  */
 int flash_erase(const void *from, int bytes) {
    const void *to = (const char *) from + bytes - 1;
-   const int sblk = addrtoblock(from);
+   int sblk = addrtoblock(from);
    const int eblk = addrtoblock(to);
    const int chip = addrtochip(to);
-   void *addr;
 
 #if defined(FVERBOSE)
    printf("flash_erase: %p for %d bytes\r\n", from, bytes);
@@ -128,8 +165,12 @@ int flash_erase(const void *from, int bytes) {
    if (chip<0 || sblk<0 || eblk<0 || eblk<sblk) return FEINVALID;
    if (chip!=addrtochip(to)) return FEINVALID;
 
-   addr = flash_start + blkSize()*sblk;
-   memset(addr, 0xff, blkSize()*(eblk-sblk+1));
+   while (sblk<=eblk) {
+      void *addr = blktoaddr(chip, sblk);
+      memset(addr, 0xff, blkSize(sblk));
+      sblk++;
+   }
+
    return 0;
 }
 
@@ -171,6 +212,7 @@ int flash_get_limits(void *zero, void **f_start, void **f_end) {
       memset(p, 0xff, 8*1024*1024);
       flash_start = p;
       flash_end = p + 8*1024*1024;
+      flash1_start = flash_start + 8*1024*1024/2;
       mprotect(p, 8*1024*1024, PROT_READ);
       isInit = 1;
    }
@@ -181,8 +223,12 @@ int flash_get_limits(void *zero, void **f_start, void **f_end) {
 }
 
 int flash_get_block_info(int *block_size) {
-   *block_size = blkSize();
+   *block_size = 64*1024;
    return 0;
 }
 
-void *flash_chip_addr(int chip) { return (chip==0) ? flash_start : NULL; }
+void *flash_chip_addr(int chip) { return blktoaddr(chip, 0); }
+
+
+
+
