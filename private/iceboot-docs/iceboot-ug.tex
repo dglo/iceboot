@@ -53,12 +53,12 @@ Channel & Description \\
 7 & PMT Front End Pedestal \\
 8 & Multiple SPE Discriminator Threshold \\
 9 & Single SPE Discriminator Threshold \\
-10 & On-Board LED Brightness Control \\
-11 & Fast ADC Reference (Pedestal Shift) \\
-12 & Internal Pulser Amplitude \\
+10 & Fast ADC Reference (Pedestal Shift) \\
+11 & Internal Pulser Amplitude \\
+12 & On-Board LED Brightness Control \\
 13 & Front End Amp Lower Clamp Voltage \\
-14 & Spare 10 bit DAD Output 0 \\
-15 & Spare 10 bit DAD Output 1 \\
+14 & Flasherboard Timing Pulse Offset \\
+15 & DC Offset of the ATWD Mux Input \\
 \end{tabular}
 \medskip \\
 The DAC channels are described in more detail at 
@@ -412,6 +412,9 @@ FADC & 0x100 \\
 This command writes the samples to 'acquisition memory'
 mapped at \$1000000.  It must be dumped using \textit{od}
 or other command.}
+\cmd{acq-led}{nseq readout-mask}{}{Variant of the acq-forced
+command (see above) that triggers on the onboard LED.  Note that
+you must first enable the LED with the \textit{enableLED} command.}
 \cmd{acq-pp}{nseq readout-mask}{}{Variant of acq-disc
 that enables ATWD 'ping-pong' mode.  Note that you cannot
 readout the FADC with this command, yet.}
@@ -435,12 +438,14 @@ with length dataLength.
 line feed character address and length to the stack}
 \cmd{disableCurrents}{}{result}{address of flag to set to disable printing of currents on the top of the screen}
 \cmd{disableHV}{}{}{Disable PMT high-voltage base}
+\cmd{disableLED}{}{}{Disable the onboard LED}
 \cmd{domid}{}{address length}{get address and length of boardID string}
 \example{ $>$ crlf domid type type \\ 7383382234da2}{Print the
 dom id string}
 \cmd{drop}{}{}{Drop the top stack element}
 \cmd{dup}{a}{a a}{Duplicate the top stack element}
 \cmd{enableHV}{}{}{Enable PMT high-voltage base}
+\cmd{enableLED}{}{}{Enable the onboard LED}
 \cmd{exec}{execAddress execLength}{}{Execute the program at execAddress with
 length execLength}
 \example{ $>$ s" stf" find if exec endif}{
@@ -518,6 +523,8 @@ the DOR card.}
 \medskip \\
 \dacChannelDescriptions
 }
+\cmd{readPressure}{}{pressure}{ Reads the DOM pressure and returns the
+  value in KPa.}
 \cmd{readTemp}{}{code}{return coded temperature value}
 \cmd{reboot}{}{}{reboot the DOM}
 \cmd{rm}{nameAddress nameLength}{}{remove the file with name at nameAddress
@@ -528,6 +535,8 @@ called unused.data on the flash filesystem}
 \cmd{rshift}{value shift}{result}{ result = value right shifted shift}
 \cmd{s`` words''}{}{wordsAddress wordsLength}{return string at wordsAddress
 with length wordsLength}
+\cmd{setLEDdelay}{delay}{}{ Set the launch delay from the onboard LED to
+  the ATWD trigger.  Delay time is (2+\textit{delay})*25ns.}
 \cmd{swap}{}{}{ swap the two top words of the stack}
 \cmd{true}{}{result}{return a true result (-1)}
 \cmd{type}{stringAddress stringLength}{}{print string at stringAddress

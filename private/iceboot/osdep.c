@@ -76,13 +76,6 @@ int executeImage(const void *addr, int nbytes) {
     return 0;
 }
 
-int isInputData(void) {
-   struct pollfd fds[1];
-   fds[0].fd = 0;
-   fds[0].events = POLLIN;
-   return poll(fds, 1, 0)==1;
-}
-
 /* FIXME: before we dump, make a copy and
  * fixup all the addresses so they map to 0x41000000
  * when this is done, we can remove the address in

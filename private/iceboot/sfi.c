@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.90 $
+ * $Revision: 1.103 $
  * $Author: arthur $
- * $Date: 2003-11-06 22:17:08 $
+ * $Date: 2004-03-16 17:42:39 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -125,6 +125,7 @@ static const char *writeDAC(const char *p);
 static void *memalloc(size_t );
 static void initMemTests(void);
 static int newLine(const char *line);
+static void setErr(const char *msg);
 
 static int blperr = 0;
 
@@ -134,11 +135,15 @@ static int stacklen = 1024;
 
 typedef enum {
    EXC_STACK_UNDERFLOW = 1,
-   EXC_STACK_OVERFLOW = 2,
-   EXC_LINE_TOO_LONG = 3
+   EXC_STACK_OVERFLOW,
+   EXC_LINE_TOO_LONG,
+   EXC_UNKNOWN_WORD,
 } ExceptionCodes;
 
-enum { ACQ_MODE_CPU = 1, ACQ_MODE_DISC = 2, ACQ_MODE_PP = 3 };
+enum { ACQ_MODE_CPU = 1, 
+       ACQ_MODE_DISC = 2, 
+       ACQ_MODE_PP = 3,
+       ACQ_MODE_LED = 4};
 
 static jmp_buf jenv;
 
@@ -289,27 +294,40 @@ static Bucket *allocBucketFromRoot(const char *nm, Bucket *rbp) {
 
   if (rbp->nm==NULL) { bp = rbp; }
   else {
-    for (bp = rbp; bp!=NULL; bp = bp->next) {
-      if (strcmp(bp->nm, nm)==0) break;
-    }
-    if (bp==NULL) {
-      /* not found...
-       */
-      bp = (Bucket *) memalloc(sizeof(Bucket));
-      bp->nm = NULL;
-    }
+     /* root bucket is not empty, we have to
+      * search to see if the bucket already 
+      * exists...
+      */
+     for (bp = rbp; bp!=NULL; bp = bp->next) {
+	if (strcmp(bp->nm, nm)==0) {
+	   /* found one!  clear it and return it...
+	    */
+	   if (bp->type==FUNC && bp->u.func!=NULL) {
+	      free((char *)bp->u.func);
+	      bp->u.func = NULL;
+	   }
+	   return bp;
+	}
+     }
+     if (bp==NULL) {
+	/* not found -- allocate memory...
+	 */
+	bp = (Bucket *) memalloc(sizeof(Bucket));
+	bp->nm = NULL;
+     }
   }
 
   if (bp->nm==NULL) {
+     /* the bucket is newly allocated, fill it out...
+      */
     bp->nm = strdup(nm);
-    bp->next = NULL;
+    
+    if (bp!=rbp) {
+       bp->next = rbp->next;
+       rbp->next = bp;
+    }
   }
-  if (bp!=rbp) {
-    /* insert into bucket chain...
-     */
-    bp->next = rbp->next;
-    rbp->next = bp;
-  }
+  
   return bp;
 }
 
@@ -658,7 +676,8 @@ static int newLine(const char *line) {
       Bucket *bp = lookupBucket(word);
 
       if (bp==NULL) {
-	printf("unknown word '%s'\r\n", word);
+	 setErr(word);
+	 longjmp(jenv, EXC_UNKNOWN_WORD);
       }
       else {
 	if (bp->type==CFUNC) line = bp->u.cfunc(line);
@@ -832,7 +851,7 @@ static void acq(int mask, int ntrig, int mode) {
    /* enable ping-pong mode if selected */
    if (mode == ACQ_MODE_PP)
        hal_FPGA_TEST_enable_ping_pong();
-   
+
    for (i=0; i < ntrig; i++) {
 
        if (mode != ACQ_MODE_PP) {
@@ -842,6 +861,9 @@ static void acq(int mask, int ntrig, int mode) {
            }
            else if (mode == ACQ_MODE_CPU) {
                hal_FPGA_TEST_trigger_forced(halTrig);
+           }
+           else if (mode == ACQ_MODE_LED) {
+               hal_FPGA_TEST_trigger_LED(halTrig);
            }
            
            /* wait for done...
@@ -912,6 +934,13 @@ static const char *acq_pp(const char *p) {
    return p;
 }
 
+static const char *acq_led(const char *p) {
+   const int mask = pop();
+   const int ntrig = pop();
+   acq(mask, ntrig, ACQ_MODE_LED);
+   return p;
+}
+
 static int readDAC(int channel) { return halReadDAC(channel); }
 static int readADC(int adc) { return halReadADC(adc); }
 static int readBaseADC(void) { return halReadBaseADC(); }
@@ -941,12 +970,29 @@ static const char *icopy(const char *p) {
 }
 
 static const char *enableHV(const char *p) {
-   halEnablePMT_HV();
+   halPowerUpBase();
+   halEnableBaseHV();
    return p;
 }
 
 static const char *disableHV(const char *p) {
-   halDisablePMT_HV();
+   halPowerDownBase();
+   return p;
+}
+
+static const char *enableLED(const char *p) {
+    hal_FPGA_TEST_enable_LED();
+    return p;
+}
+
+static const char *disableLED(const char *p) {
+    hal_FPGA_TEST_disable_LED();
+    return p;
+}
+
+static const char *setLEDdelay(const char *p) {
+   int delay = pop();
+   hal_FPGA_TEST_set_atwd_LED_delay(delay);
    return p;
 }
 
@@ -1250,6 +1296,37 @@ static const char *sdup(const char *p) {
   return p;
 }
 
+/*
+ * do a fast, compressed binary dump like od.
+ * note the non-standard convention of
+ * dumping words not bytes is nevertheless
+ * slavishly followed.
+ */
+#define ZDUMP_IOBUFSIZ 400
+static const char *zdump(const char *p) {
+  const int cnt = pop();
+  unsigned int *addr = (unsigned int*) pop();
+  char iobuf[ZDUMP_IOBUFSIZ];
+  int err, flush;
+  z_stream zs;
+  /* Give downstream decoder a heads-up on original text size */
+  write(1, &cnt, 4);
+  zs.zalloc = Z_NULL; zs.zfree = Z_NULL; zs.opaque = Z_NULL;
+  err = deflateInit(&zs, 5);
+  zs.next_in = (char*) addr;
+  zs.avail_in = 4*cnt;
+  flush = Z_NO_FLUSH;
+  while (err != Z_STREAM_END) {
+    zs.next_out = iobuf;
+    zs.avail_out = sizeof(iobuf);
+    err = deflate(&zs, flush);
+    if (zs.avail_out > 0) flush = Z_FINISH;
+    write(1, iobuf, sizeof(iobuf)-zs.avail_out);
+  }
+  err = deflateEnd(&zs);
+  return p;
+}   
+
 /* dump memory at address count
  */
 static const char *odump(const char *p) {
@@ -1351,6 +1428,34 @@ static const char *prtTemp(const char *p) {
    return p;
 }
 
+static int readPressure(void) {  
+
+    unsigned int loop_cnt = 1000;
+    unsigned long pressure_sum = 0;
+    unsigned long voltage_sum = 0;
+    float mean_pressure, mean_voltage;
+    int pressure, i;
+
+    halEnableBarometer();
+    halUSleep(1000);
+
+    /* Average the barometer reading and the 5V supply reading */
+    for(i = 0; i < loop_cnt; i++) {
+        pressure_sum += halReadADC(DOM_HAL_ADC_PRESSURE);
+        voltage_sum  += halReadADC(DOM_HAL_ADC_5V_POWER_SUPPLY);                        
+    }
+    
+    halDisableBarometer();
+    
+    mean_pressure = ((float) pressure_sum) / loop_cnt;
+    mean_voltage  = ((float) voltage_sum)  / loop_cnt;
+
+    /* This converts the pressure to KPa */
+    pressure = (int) ((mean_pressure/mean_voltage + 0.095)/0.009);
+    
+    return pressure;
+}
+
 static const char *memcp(const char *p) {
    const int len = pop();
    const void *mem = (const void *) pop();
@@ -1395,7 +1500,6 @@ static const char *boardID(const char *p) {
 
 static const char *domID(const char *p) {
    const char *id = halGetBoardID();
-   if (strlen(id)==16) id += 4; /* skip fixed part... */
    push((int) id);
    push(strlen(id));
    return p;
@@ -1421,8 +1525,12 @@ static void prtCurrents(int rawCurrents) {
    const float *eff = (rawCurrents) ? ueff : reff;
 
    /*                     5V  3.3V 2.5V 1.8V -5V */
-   /* 1.8V and 2.5V have been swapped            */
-   const int   order[] = { 0, 1,   3,   2,    4 };
+   /* 1.8V and 2.5V have been swapped back
+    * 
+    * FIXME: this order is no longer needed, should
+    * we remove it?
+    */
+   const int   order[] = { 0, 1,   2,   3,    4 };
    int ii;
    
    /* format the currents... */
@@ -1680,52 +1788,52 @@ static const char *pldVersions(const char *p) {
    return p;
 }
 
-
 static const char *fpgaVersions(const char *p) {
-#define EXPVER(a) \
-  (expected_versions[FPGA_VERSIONS_TYPE_ICEBOOT][FPGA_VERSIONS_##a])
-
+#define EXPVER(a, b) (expected_versions[a][FPGA_VERSIONS_##b])
    /* FIXME: put the correct address in here... */
    unsigned *versions = (unsigned *) 0x90000000;
-   
+   const int type = 
+      (versions[0] <= FPGA_VERSIONS_TYPE_STF_NOCOM) ? 
+      versions[0] : FPGA_VERSIONS_TYPE_ICEBOOT;
+
    /* print out the versioning info...
     */
    printf("fpga type    %d\r\n", versions[0]);
    printf("build number %d\r\n", (versions[2]<<16) | versions[1]);
    printf("matches?     %s\r\n", 
-	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT, 
+	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT,
 				  DOM_HAL_FPGA_COMP_ALL)?"no":"yes");
    printf("versions:\r\n");
    printf("  com_fifo           %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_COM_FIFO], EXPVER(COM_FIFO));
+	  versions[FPGA_VERSIONS_COM_FIFO], EXPVER(type, COM_FIFO));
    
    printf("  com_dp             %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_COM_DP], EXPVER(COM_DP));
+	  versions[FPGA_VERSIONS_COM_DP], EXPVER(type, COM_DP));
 
    printf("  daq                %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_DAQ], EXPVER(DAQ));
+	  versions[FPGA_VERSIONS_DAQ], EXPVER(type, DAQ));
 
    printf("  pulsers            %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_PULSERS], EXPVER(PULSERS));
+	  versions[FPGA_VERSIONS_PULSERS], EXPVER(type, PULSERS));
 
    printf("  discriminator_rate %d [%d]\r\n",
 	  versions[FPGA_VERSIONS_DISCRIMINATOR_RATE], 
-	  EXPVER(DISCRIMINATOR_RATE));
+	  EXPVER(type, DISCRIMINATOR_RATE));
 
    printf("  local_coinc        %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_LOCAL_COINC], EXPVER(LOCAL_COINC));
+	  versions[FPGA_VERSIONS_LOCAL_COINC], EXPVER(type, LOCAL_COINC));
 
    printf("  flasher_board      %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_FLASHER_BOARD], EXPVER(FLASHER_BOARD));
+	  versions[FPGA_VERSIONS_FLASHER_BOARD], EXPVER(type, FLASHER_BOARD));
 
    printf("  trigger            %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_TRIGGER], EXPVER(TRIGGER));
+	  versions[FPGA_VERSIONS_TRIGGER], EXPVER(type, TRIGGER));
 
    printf("  local_clock        %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_LOCAL_CLOCK], EXPVER(LOCAL_CLOCK));
+	  versions[FPGA_VERSIONS_LOCAL_CLOCK], EXPVER(type, LOCAL_CLOCK));
 
    printf("  supernova          %d [%d]\r\n", 
-	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(SUPERNOVA));
+	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(type, SUPERNOVA));
 
    return p;
 }
@@ -1746,6 +1854,45 @@ static void soFlush(void) {
    if (soBufLen>0) write(1, soBuf, soBufLen);
    soBufLen = 0;
 }
+
+static const char *errmsg = NULL;
+
+static void setErr(const char *msg) {
+   if (errmsg!=NULL) {
+      free((char *)errmsg);
+      errmsg=NULL;
+   }
+   errmsg = strdup(msg);
+}
+
+static void prtErr(int err) {
+   if (err==EXC_STACK_UNDERFLOW) {
+      printf("Error: stack underflow");
+   }
+   else if (err==EXC_STACK_OVERFLOW) {
+      printf("Error: stack overflow");
+   }
+   else if (err==EXC_LINE_TOO_LONG) {
+      printf("Error: line too long");
+   }
+   else if (err==EXC_UNKNOWN_WORD) {
+      printf("Error: unknown word");
+   }
+   else {
+      printf("Error: unknown");
+   }
+
+   /* print extra info... */
+   if (errmsg!=NULL) {
+      printf(": '%s'", errmsg);
+      free((char *)errmsg);
+      errmsg=NULL;
+   }
+   printf("\r\n");
+   fflush(stdout);
+}
+
+static int isInputData(void) { return halIsInputData(); }
 
 int main(int argc, char *argv[]) {
   char *line;
@@ -1822,6 +1969,11 @@ int main(int argc, char *argv[]) {
      { "acq-forced" , acq_cpu },
      { "acq-disc" , acq_disc },
      { "acq-pp" , acq_pp },
+     { "acq-led", acq_led },
+     { "zd"	, zdump },
+     { "enableLED", enableLED },
+     { "disableLED", disableLED },
+     { "setLEDdelay", setLEDdelay },
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -1836,6 +1988,7 @@ int main(int argc, char *argv[]) {
      { "i", loopCount },
      { "readBaseDAC", readBaseDAC },
      { "readBaseADC", readBaseADC },
+     { "readPressure", readPressure },
   };
   const int nInitCFuncs0 = sizeof(initCFuncs0)/sizeof(initCFuncs0[0]);
 
@@ -1914,8 +2067,6 @@ int main(int argc, char *argv[]) {
   int escaped = 0;
   int err;
 
-  osInit(argc, argv);
- 
   if ((stack = (int *) memalloc(sizeof(int) * stacklen))==NULL) {
     printf("can't allocate stack...\n");
     return 1;
@@ -1948,9 +2099,16 @@ int main(int argc, char *argv[]) {
   for (i=0; i<nInitConstants; i++) 
     addConstantBucket(initConstants[i].nm, initConstants[i].constant);
 
+  /* os specific initializations... */
+  osInit(argc, argv);
+
   initMemTests();
 
-  sourceStartup();
+  if ((err=setjmp(jenv))!=0) {
+     printf("In startup.fs: ");
+     prtErr(err);
+  }
+  else sourceStartup();
 
   printf(" Iceboot (%s) build %s.....\r\n", STRING(PROJECT_TAG),
 	 STRING(ICESOFT_BUILD));
@@ -1958,20 +2116,7 @@ int main(int argc, char *argv[]) {
   line = (char *) memalloc(linesz);
 
   if ((err=setjmp(jenv))!=0) {
-     if (err==EXC_STACK_UNDERFLOW) {
-	printf("Error: stack underflow\r\n");
-     }
-     else if (err==EXC_STACK_OVERFLOW) {
-	printf("Error: stack overflow\r\n");
-     }
-     else if (err==EXC_LINE_TOO_LONG) {
-	printf("Error: line too long\r\n");
-     }
-     else {
-	printf("Error: unknown!\r\n");
-     }
-     fflush(stdout);
-
+     prtErr(err);
      /* reset parsed line... */
      escaped = 0;
      ei = 0;
@@ -2272,4 +2417,3 @@ static const char *writeDAC(const char *p) {
    halWriteDAC(channel, value);
    return p;
 }
-
