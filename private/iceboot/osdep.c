@@ -1,5 +1,7 @@
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -10,6 +12,7 @@
 
 #include "osdep.h"
 #include "hal/DOM_MB_hal.h"
+#include "iceboot/flash.h"
 
 #define MAX_CLI_ARGS 6
 #define MAX_FILENAME_LEN 32
@@ -80,6 +83,16 @@ int isInputData(void) {
    return poll(fds, 1, 0)==1;
 }
 
+static void dumpflash(int sig) {
+   int fd = open("flash.dump", O_WRONLY|O_CREAT|O_TRUNC, 0644);
+   if (fd>=0) {
+      void *flash_start, *flash_end;
+      flash_get_limits(NULL, &flash_start, &flash_end);
+      write(fd, flash_start, (char *) flash_end - (char *) flash_start);
+      close(fd);
+   }
+}
+
 int osInit(int argc, char *argv[]) {
     int i;
 
@@ -114,7 +127,17 @@ int osInit(int argc, char *argv[]) {
     /* do this for simboot IO consistency */
     setvbuf(stdout, (char *)0, _IONBF, 0);
 
+    signal(SIGUSR1, dumpflash);
+
     return 0;
 }
 
 
+/* wait for input data approx ms milliseconds...
+ */
+int waitInputData(int ms) {
+   struct pollfd fds[1];
+   fds[0].fd = 0;
+   fds[0].events = POLLIN;
+   return poll(fds, 1, ms)==1;
+}

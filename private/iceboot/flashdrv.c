@@ -27,6 +27,8 @@ static int blkSize(void) {
 static char *flash_start;
 static char *flash_end;
 
+/* emulate the chips on the dom...
+ */
 static int addrtochip(const void *a) {
    const char *addr = (const char *) a;
    if (addr>=flash_start && addr<=flash_end-1) return 0;
@@ -40,7 +42,7 @@ static int addrtoblock(const void *a) {
    const char *fs0 = (const char *) flash_start;
    int idx;
    const int chip = addrtochip(a);
-   if (chip==0) idx = addr - fs0;
+   if (chip==0 || chip==1) idx = addr - fs0;
    else return -1;
    return idx/blkSize();
 }
@@ -151,9 +153,10 @@ int flash_verify_addr(const void *addr) {
    return 0;
 }
 
+/* do the addresses overlap more than one chip?
+ */
 int flash_code_overlaps(void *from, void *to) {
-   /* ?!?!?? */
-   return 0;
+   return addrtochip(from)!=addrtochip(to);
 }
 
 int flash_init(void) { return 0; }

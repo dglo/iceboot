@@ -1,8 +1,10 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "iceboot/sfi.h"
 #include "booter/epxa.h"
 #include "iceboot/osdep.h"
+#include "hal/DOM_MB_hal.h"
 
 void icacheInvalidateAll(void) {
     /* this macro can discard dirty cache lines (N/A for ICache) */
@@ -44,9 +46,12 @@ int executeImage(const void *addr, int nbytes) {
 }
 
 int isInputData(void) {
-   return (*(volatile int *)(REGISTERS + 0x280))&0x1f;
-}
+   if (halIsConsolePresent()) {
+      return (*(volatile int *)(REGISTERS + 0x280))&0x1f;
+   }
 
+   return hal_FPGA_TEST_msg_ready();
+}
 
 /* get m or n parameter...
  */
@@ -136,6 +141,9 @@ int fpga_config(int *p, int nbytes) {
   int *cdata = (int *) (REGISTERS + 0x148);
   int i;
 
+  /* request reboot from DOR */
+  if (halIsFPGALoaded()) hal_FPGA_TEST_request_reboot();
+
   /* check magic number...
    */
   if (p[0] != 0x00494253) {
@@ -153,6 +161,13 @@ int fpga_config(int *p, int nbytes) {
   if ((p[3]%4)!=0 || (p[2]%4)!=0) {
     printf("invalid file length/offset\n");
     return 1;
+  }
+
+  /* wait for reboot granted from DOR */
+  if (halIsFPGALoaded()) {
+     int i;
+     for (i=0; i<1000 && !hal_FPGA_TEST_is_reboot_granted(); i++) 
+	halUSleep(10);
   }
 
   /* setup clock */
@@ -205,3 +220,15 @@ int fpga_config(int *p, int nbytes) {
   
   return 0;
 }
+
+/* wait input data
+ */
+int waitInputData(int ms) {
+   int j;
+   for (j=0; j<ms*10; j++) {
+      halUSleep(100);
+      if (isInputData()) break;
+   }
+   return isInputData();
+}
+

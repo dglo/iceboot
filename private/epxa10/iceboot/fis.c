@@ -266,6 +266,8 @@ static int numReservedBlocks(void) { return 7; }
  *      into it, from the top down or the
  *      bottom up.  files too big to fit anywhere
  *      in the top, we just lv alone...
+ *
+ *   3) files may _not_ span more than one chip.
  */
 int fisCreate(const char *name, void *addr, int len) {
    const struct fis_image_desc *img = fisLookup(name);
@@ -358,8 +360,6 @@ int fisCreate(const char *name, void *addr, int len) {
       last_block = flash_end - block_size;
       tblocks = (last_block - first_block + block_size - 1)/block_size;
 
-      /* FIXME: file contents should be hashed too!!!
-       */
       bloc = (unsigned) (first_block + block_size*hashFileName(name, tblocks));
 
       if ((idx = prevEntIdx(ents, ndirents, bloc))<0) {
@@ -416,7 +416,8 @@ int fisCreate(const char *name, void *addr, int len) {
       }
 
       if (flash_write((void *)bloc, addr, len)) {
-	 printf("fis create: can't write\r\n");
+	 printf("fis create: can't write: 0x%08x (%d) -> 0x%08x\r\n", 
+		addr, len, bloc);
 	 return 1;
       }
       
@@ -467,6 +468,9 @@ int fisCreate(const char *name, void *addr, int len) {
 }
 
 /* initialize fis filesystem...
+ *
+ * FIXME: deal with the fact that
+ * we have 2 flash chips...
  */
 int fisInit(void) {
    unsigned flash_start, flash_end;
@@ -509,7 +513,7 @@ int fisInit(void) {
    /* lock all data -- except for iceboot...
     */
    printf("lock... "); fflush(stdout);
-   flash_unlock((void *)flash_start, flash_end - flash_start);
+   flash_lock((void *)flash_start, flash_end - flash_start);
 
    /* setup directory -- with iceboot...
     */

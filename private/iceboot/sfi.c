@@ -85,13 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * \section bugs Bugs
- *   display gets corrupted from time-to-time as PC doesn't always
- * keep up with the serial port...
- *
- * $Revision: 1.58 $
+ * $Revision: 1.69 $
  * $Author: arthur $
- * $Date: 2003-05-14 15:06:01 $
+ * $Date: 2003-07-11 17:49:47 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -106,9 +102,13 @@
 #include "iceboot/memtests.h"
 #include "hal/DOM_MB_pld.h"
 #include "hal/DOM_MB_fpga.h"
+#include "dom-fpga/fpga-versions.h"
 #include "iceboot/flash.h"
 #include "iceboot/fis.h"
 #include "osdep.h"
+
+#define STR(a) #a
+#define STRING(a) STR(a)
 
 void delay(int);
 
@@ -123,9 +123,6 @@ static int blperr = 0;
 static int *stack = NULL;
 static int sp = 0;
 static int stacklen = 1024;
-
-#define HAS_REDBOOT_COMMANDS
-#undef HAS_REDBOOT_COMMANDS
 
 typedef enum {
    EXC_STACK_UNDERFLOW = 1,
@@ -357,7 +354,6 @@ void addConstantBucket(const char *nm, int constant) {
   bucket->type = CONSTANT;
   bucket->u.constant = constant;
 }
-
 
 /* colon word, next word we save, then we copy the rest...
  */
@@ -848,19 +844,11 @@ static const char *ymodem1k(const char *p) {
 
   /* continuously write 'C' until we get a packet...
    */
-  for (i=0; i<200; i++) {
-     int j;
-     
+  for (i=0; i<400; i++) {
      write(1, &nak, 1);
-
-     for (j=0; j<5000; j++) {
-	halUSleep(100);
-	if (isInputData()) break;
-     }
-
-     if (isInputData()) break;
+     if (waitInputData(200)) break;
   }
-  
+
   /* read packet loop...
    */
   while (1) {
@@ -1154,6 +1142,16 @@ static const char *prtTemp(const char *p) {
    return p;
 }
 
+static const char *memcp(const char *p) {
+   const int len = pop();
+   const void *mem = (const void *) pop();
+   void *ptr = malloc(len);
+   memcpy(ptr, mem, len);
+   push((int)ptr);
+   push(len);
+   return p;
+}
+
 static const char *crlf(const char *p) { 
    static const char *crlf = "\r\n";
    push((int) crlf);
@@ -1186,35 +1184,20 @@ static const char *boardID(const char *p) {
    return p;
 }
 
-#if defined(HAS_REDBOOT_COMMANDS)
-/* call out to an iceboot command...
- */
-static const char *iceboot(const char *p) {
-   /* copy command locally...
-    */
-   char *command = strdup(p);
-   char *csave = command;
-   char **argv = (char **)calloc(MAX_ARGV, sizeof(char *));
-
-#if defined(HAS_REDBOOT_COMMANDS)
-   int argc;
-   struct cmd *cmd;
-
-   if ((cmd = parse(&command, &argc, argv)) != NULL) {
-      cmd->fun(argc, argv);
-   }
-   else {
-      printf("can't find redboot command: '%s'\r\n", p);
-   }
-#else
-   printf("redboot commands disabled...\r\n");
-#endif
-
-   free(csave);
-   free(argv);
-   return p + strlen(p);
+static const char *domID(const char *p) {
+   const char *id = halGetBoardID();
+   if (strlen(id)==16) id += 4; /* skip fixed part... */
+   push((int) id);
+   push(strlen(id));
+   return p;
 }
-#endif
+
+static const char *hvid(const char *p) {
+   const char *id = halHVSerial();
+   push((int) id);
+   push(strlen(id));
+   return p;
+}
 
 static void prtCurrents(int rawCurrents) {
    float currents[5];
@@ -1382,9 +1365,18 @@ static int uncomp(Bytef *dest, uLongf *destLen,
     err = inflate(&stream, Z_FINISH);
     if (err != Z_STREAM_END) {
         inflateEnd(&stream);
+
+	/* hmmm, sometimes we get an error, even though
+	 * the data are ok...
+	 *
+	 * FIXME: track this down...
+	 */
+	if (stream.total_out==*destLen) return Z_OK;
+
         return err == Z_OK ? Z_BUF_ERROR : err;
     }
     *destLen = stream.total_out;
+
 
     err = inflateEnd(&stream);
     return err;
@@ -1458,6 +1450,36 @@ static const char *gunzip(const char *p) {
    return p;
 }
 
+static const char *doInstall(const char *p) {
+   extern int flashInstall(void);
+   flashInstall();
+   return p;
+}
+
+static const char *fpgaVersions(const char *p) {
+   /* FIXME: put the correct address in here... */
+   unsigned *versions = (unsigned *) 0x90000000;
+   
+   /* print out the versioning info...
+    */
+   printf("fpga type    %d\r\n", versions[0]);
+   printf("build number %d\r\n", (versions[2]<<16) | versions[1]);
+   printf("versions:\r\n");
+   printf("  com_fifo           %d\r\n", versions[FPGA_VERSIONS_COM_FIFO]);
+   printf("  com_dp             %d\r\n", versions[FPGA_VERSIONS_COM_DP]);
+   printf("  daq                %d\r\n", versions[FPGA_VERSIONS_DAQ]);
+   printf("  pulsers            %d\r\n", versions[FPGA_VERSIONS_PULSERS]);
+   printf("  discriminator_rate %d\r\n", 
+	  versions[FPGA_VERSIONS_DISCRIMINATOR_RATE]);
+   printf("  local_coinc        %d\r\n", versions[FPGA_VERSIONS_LOCAL_COINC]);
+   printf("  flasher_board      %d\r\n", 
+	  versions[FPGA_VERSIONS_FLASHER_BOARD]);
+   printf("  trigger            %d\r\n", versions[FPGA_VERSIONS_TRIGGER]);
+   printf("  local_clock        %d\r\n", versions[FPGA_VERSIONS_LOCAL_CLOCK]);
+   printf("  supernova          %d\r\n", versions[FPGA_VERSIONS_SUPERNOVA]);
+
+   return p;
+}
 
 int main(int argc, char *argv[]) {
   char *line;
@@ -1502,10 +1524,9 @@ int main(int argc, char *argv[]) {
      { "s\"", squote },
      { "type", type },
      { "crlf", crlf },
-     { "domid", boardID },
-#if defined(HAS_REDBOOT_COMMANDS)
-     { "iceboot", iceboot },
-#endif
+     { "boardid", boardID },
+     { "domid", domID },
+     { "hvid", hvid },
      { "prtRawCurrents", prtRawCurrents },
      { "prtCookedCurrents", prtCookedCurrents },
      { "invalidateICache", invalidateICache },
@@ -1525,6 +1546,9 @@ int main(int argc, char *argv[]) {
      { "send", sendMsg },
      { "enableHV", enableHV },
      { "disableHV", disableHV },
+     { "cp", memcp },
+     { "install", doInstall },
+     { "fpga-versions", fpgaVersions },
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -1550,9 +1574,9 @@ int main(int argc, char *argv[]) {
       * at the top of this file!
       */
      { "readADC", readADC },
-     { "readDAC", readDAC },
+     { "readDAC", readDAC }, 
      { "not", not },
-  };
+ };
   const int nInitCFuncs1 = sizeof(initCFuncs1)/sizeof(initCFuncs1[0]);
 
   static struct {
@@ -1606,6 +1630,7 @@ int main(int argc, char *argv[]) {
      { "blperr", (int) &blperr },
      { "rawCurrents", (int) &rawCurrents },
      { "disableCurrents", (int) &disableCurrents },
+     { "build", ICESOFT_BUILD },
   };
   const int nInitConstants = sizeof(initConstants)/sizeof(initConstants[0]);
 
@@ -1653,14 +1678,10 @@ int main(int argc, char *argv[]) {
 
   initMemTests();
 
-#if defined(HAS_REDBOOT_COMMANDS)
-  cmds_init();
-#endif  
-
   sourceStartup();
 
-  printf("--------\r\n");
-  printf("Ready...\r\n");
+  printf(" Iceboot (%s) build %s.....\r\n", STRING(PROJECT_TAG),
+	 STRING(ICESOFT_BUILD));
 
   line = (char *) memalloc(linesz);
 
@@ -1976,5 +1997,4 @@ static const char *writeDAC(const char *p) {
    halWriteDAC(channel, value);
    return p;
 }
-
 

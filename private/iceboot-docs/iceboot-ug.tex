@@ -8,33 +8,33 @@
 \makeindex
 
 \newcommand{\example}[2]{ 
-	\subsubsection*{Examples} {\tt #1} \medskip \\ 
-	#2
+        \subsubsection*{Examples} {\tt #1} \medskip \\ 
+        #2
 }
 
 \newcommand{\nextexample}[2]{
-	\flushleft {\tt #1} \medskip \\ 
-	#2
+        \flushleft {\tt #1} \medskip \\ 
+        #2
 }
 
 \newcommand{\cmd}[4]{
-	\subsection{#1} \index{Commands!#1}
-	\subsubsection*{Description}
-	\emph{#2} #1 \emph{#3} \medskip \\
-	#4
+        \subsection{#1} \index{Commands!#1}
+        \subsubsection*{Description}
+        \emph{#2} #1 \emph{#3} \medskip \\
+        #4
 }
 
 \newcommand{\cmdni}[4]{
-	\subsection{#1}
-	\subsubsection*{Description}
-	\emph{#2} #1 \emph{#3} \medskip \\
-	#4
+        \subsection{#1}
+        \subsubsection*{Description}
+        \emph{#2} #1 \emph{#3} \medskip \\
+        #4
 }
 
 \newcommand{\samplecmd}[4]{
-	\subsubsection*{Description}
-	\emph{#2} #1 \emph{#3} \medskip \\
-	#4
+        \subsubsection*{Description}
+        \emph{#2} #1 \emph{#3} \medskip \\
+        #4
 }
 
 \newcommand{\dacChannelDescriptions}{
@@ -186,7 +186,7 @@ is found in section \ref{configfile}
 on page \pageref{configfile}.  The following
 sections will step through the boot process.
 
-	\subsection{Hardware Initialization}
+        \subsection{Hardware Initialization}
 
 First in line to be programmed are the Excalibur PLLs.
 There are two of them:  PLL1 \index{Excalibur!PLL1} and 
@@ -239,7 +239,7 @@ jump to the code that contains the boot prompt,
 Iceboot.
 
 \section{Iceboot Command Line Interface}
-	\subsection{Overview}
+        \subsection{Overview}
 
 Once the hardware is initialized, we want to run
 the command line boot environment, this will allow us 
@@ -354,7 +354,7 @@ Print "hi there" and carraige return line feed to stdout}
 start (inclusive).  Words are executed end - start times and the
 variable \emph{i} is set to the current loop count.}
 \example{ $>$ 5 0 ?DO i LOOP .s \\ <5> 0 1 2 3 4}{
-	Put the numbers 0-4 on the stack.
+        Put the numbers 0-4 on the stack.
 }
 
 \cmdni{ $@$, w$@$, c$@$}{address}{value}{Get a 32bit word, 
@@ -387,13 +387,16 @@ The input mux channels are described in more detail at
 
 \cmd{and}{a b}{result}{a and b}
 \cmd{base}{}{address}{Address of number base (10=decimal, 16=hex, ...)}
-\cmd{domid}{}{address length}{get address and length of boardID string}
-\example{ $>$ crlf domid type type \\ 7383382234da2}{Print the
-dom id string}
-
 \cmd{constant}{a}{name}{Set name to constant value a}
+\cmd{cp}{address length}{cpAddress cpLength}{Copy a memory block to sdram -- 
+usually used to copy from flash to sdram.}
+\example{ $>$ s\" test.sbi\" find if cp s\" test2.sbi\" create endif }{Copy
+the file in flash to memory, then create a new file on
+the flash filesystem with the same contents but a
+different name.}
+
 \cmd{create}{dataAddress dataLength nameAddress nameLength}{}{
-	Create a file on the flash filesystem with name at
+        Create a file on the flash filesystem with name at
 address nameAddress of length nameLength using data at dataAddress
 with length dataLength.
 }
@@ -402,6 +405,9 @@ with length dataLength.
 line feed character address and length to the stack}
 \cmd{disableCurrents}{}{result}{address of flag to set to disable printing of currents on the top of the screen}
 \cmd{disableHV}{}{}{Disable PMT high-voltage base}
+\cmd{domid}{}{address length}{get address and length of boardID string}
+\example{ $>$ crlf domid type type \\ 7383382234da2}{Print the
+dom id string}
 \cmd{drop}{}{}{Drop the top stack element}
 \cmd{dup}{a}{a a}{Duplicate the top stack element}
 \cmd{enableHV}{}{}{Enable PMT high-voltage base}
@@ -414,7 +420,7 @@ exec it (run it).
 
 \cmd{false}{}{false}{return false (0)}
 \cmd{find}{nameAddress nameLength}{fileAddress fileLength status}{
-	find the file with name at nameAddress of length nameLength
+        find the file with name at nameAddress of length nameLength
 and return it's address and length to the stack if status=1, if status=0
 then do nothing.
 }
@@ -431,7 +437,7 @@ fpga with the sbi file named stf.sbi in the flash filesystem}
 
 \cmd{free}{address}{}{Free allocated data at address.}
 \cmd{gunzip}{dataAddress dataLength}{destAddress destLength}{
-	Unzip a gzip file at dataAddress of length dataLength and
+        Unzip a gzip file at dataAddress of length dataLength and
 put the resulting data in destAddress with length destLength.  if
 destLength=0 and destAddress=0 there was an error.
 }
@@ -443,11 +449,15 @@ the stack.}
 \cmd{if cmds endif}{cond}{}{execute commands if cond is non-zero}
 \example{ $>$ 3 readADC 1000 $>$ if s" high current on +5V" type 
 crlf type endif }{
-	Read the +5V current and print a warning if it is too high.
+        Read the +5V current and print a warning if it is too high.
 }
 
 \cmd{init}{}{}{initialize flash filesystem, all data on
 flash will be \emph{erased}}
+\cmd{install}{}{}{install a new flash filesystem over the wire, all data on
+flash will be \emph{erased} -- and replaced with the data in the
+intel hex format file which is sent over the wire.}
+
 \cmd{interpret}{srcAddress srcLength}{}{Interpret data at
 address srcAddress with length srcLength}
 \example{ $>$ s" hi there type crlf type" interpret \\ hi there }{
@@ -468,6 +478,12 @@ whether or not to print raw or cooked currents to the top of the screen.}
 \cmd{readADC}{channel}{value}{read ADC at channel.
 \medskip \\
 \adcChannelDescriptions }
+
+\cmd{rcv}{}{messageType messageAddress messageLength}{receive a message
+from the DOR card.}
+\cmd{send}{messageType messageAddress messageLength}{send a message to
+the DOR card.}
+
 \cmd{readDAC}{channel}{value}{read DAC at channel.
 \medskip \\
 \dacChannelDescriptions
@@ -503,13 +519,13 @@ nameAddress with length nameLength}
 
 \cmd{xor}{a b}{result}{result = a xor b}
 \cmd{ymodem1k}{}{dataAddress dataLength}{
-	Download a file over the terminal return the address
+        Download a file over the terminal return the address
 and length of the data returned.
 }
 
 \section{Coding and Building the software}
-	\subsection{Overview}
-	
+        \subsection{Overview}
+        
 Iceboot is a combination of a few different projects
 that are checked into the icecube CVS repository.  These
 project are all written in C.  The
@@ -517,21 +533,21 @@ BFD build system (documented elsewhere) is used to build
 each of these projects.  The
 following sections describe the different projects.
 
-	\subsection{hal}
+        \subsection{hal}
 
 \index{hal} The hal project defines and implements the hardware access layer.  
 It is used to 
 abstract hardware access to facilitate simulation
 without real hardware.  Hal is documented at \url{http://deimos.lbl.gov/~arthur/dom-mb}
 
-	\subsection{dom-loader}
+        \subsection{dom-loader}
 
 \index{dom-loader} The dom-loader project contains the hardware configuration file that 
 is used to configure the hardware on bootup.  This allows us to 
                          use epxa1 and epxa4 chips and
                           deal with different setting of the
                           dom-mainboard and the epxa eval boards
-			\label{configfile}.  The config file is
+                        \label{configfile}.  The config file is
 parsed to generate the low-level assembler code that configures
 the hardware.
 
@@ -539,13 +555,13 @@ This project also builds the boot image and contains the
 low-level code necessary to get read/write access to stdin
 and stdout over the serial port, or, eventually, the communications
 channel.
-			
-	\subsection{iceboot}
+                        
+        \subsection{iceboot}
 
 The Iceboot project contains the C source for
 the forth interpreter.
 
-	\subsection{stf}
+        \subsection{stf}
 
 \index{stf} Once hardware is working, a pass/fail high-level test
 is often required.  The stf project provides the infrastructure

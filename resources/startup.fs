@@ -18,10 +18,6 @@
 12 500 writeDAC
 
 \
-\ convenience routines...
-\
-
-\
 \ run stf server...
 \
 : stf s" stf.sbi" find if fpga endif s" stfserv" find if exec endif ;
@@ -30,3 +26,47 @@
 \ run stf menu program...
 \
 : menu s" stf.sbi" find if fpga endif s" menu" find if exec endif ;
+
+\
+\ run domapp
+\
+: domapp s" domapp.sbi" find if fpga endif s" domapp" find if exec endif ;
+
+\
+\ comm stuff...
+\
+$90081030 constant comctl
+$90081034 constant comstatus
+$90081038 constant comtx
+$9008103c constant comrx
+
+$50000000 constant CPLD
+
+s" iceboot.sbi" find if fpga drop endif
+
+$00a04800 comctl !
+
+: yorn if s" yes" else s" no" endif type crlf type ;
+
+: rx-ready comstatus @ 1 and s" rx-ready: " type yorn ;
+: rx-empty comstatus @ 2 and s" rx-empty: " type yorn ;
+: rx-almost-full comstatus @ $40 and s" rx-almost-full: " type yorn ;
+: rx-full comstatus @ $80 and s" rx-full: " type yorn ;
+: rx-count comstatus @ $ff00 and 8 rshift s" rx-count: " type . drop ;
+: tx-almost-empty comstatus @ $00010000 and s" tx-almost-empty: " type yorn ;
+: tx-almost-full comstatus @ $00020000 and s" tx-almost-full: " type yorn ;
+: tx-read-empty comstatus @ $00100000 and s" tx-read-empty: " type yorn ;
+
+: prt-status rx-ready rx-empty rx-almost-full rx-full rx-count tx-almost-empty tx-almost-full tx-read-empty ;
+
+: set-rx-done 1 comctl ! ;
+
+: prt-err base @ comstatus @ &24 rshift &16 base ! . swap base ! drop ;
+
+: echo rcv swap dup constant buf swap send buf free drop;
+
+: not 1 and 1 xor ;
+: serial-power CPLD $b + c@ 1 and ;
+
+
+: echo-mode 2000000000 0 ?DO echo LOOP
