@@ -28,8 +28,6 @@ enum states {
    ST_OFFSET0, ST_OFFSET1, ST_OFFSET2, ST_OFFSET3 /* 13, 14, 15, 16, 17 */
 };
 
-/* FIXME: deal with the fact that we have 2 flash chips...
- */
 int flashInstall(void) {
    void *fs, *fe;
    int nretries;
@@ -44,6 +42,8 @@ int flashInstall(void) {
    int shift = 0;
    enum states state = ST_START;
    unsigned char data[256];
+   int i;
+   unsigned chip_start[2], chip_end[2];
    
    /* verify...
     */
@@ -57,9 +57,9 @@ int flashInstall(void) {
       nr = read(0, &c, 1);
 
       if (nr==1) {
+	 printf("%c\r\n", c); fflush(stdout);
 	 if (toupper(c)=='Y') break;
 	 else if (toupper(c)=='N') return 1;
-	 write(1, &c, 1);
       }
       if (nretries==10) return 1;
    }
@@ -67,14 +67,31 @@ int flashInstall(void) {
    /* erase flash...
     */
    flash_get_limits(NULL, &fs, &fe);
-   
-   printf("\r\nunlock... "); fflush(stdout);
-   flash_unlock(fs, ((char *)fe-(char *)fs));
-   
-   /* erase all data...
-    */
-   printf("erase... "); fflush(stdout);
-   flash_erase(fs, ((char *) fs - (char *)fe));
+
+   chip_start[0] = (unsigned) fs;
+   chip_start[1] = (unsigned) flash_chip_addr(1);
+   chip_end[0] = chip_start[1]-1;
+   chip_end[1] = (unsigned) fe;
+
+   for (i=0; i<2; i++) {
+      /* unlock all data -- except for iceboot (first 7 * 64K bytes)...
+       */
+      printf("chip %d: unlock... ", i); fflush(stdout);
+      if (flash_unlock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to unlock %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      
+      /* erase all data -- except for iceboot...
+       */
+      printf("erase... "); fflush(stdout);
+      if (flash_erase((void *) chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to erase %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      
+      printf("\r\n");
+   }
 
    /* program from stdin...
     *
@@ -248,7 +265,14 @@ int flashInstall(void) {
 		  if (ndata==len) {
 		     ck = 0;
 		     state = ST_CK0;
-		     /* now program the data... */
+		     /* now program the data... 
+		      *
+		      * FIXME: we are relying on the fact
+		      * that we don't overlap chips here!!!
+		      *
+		      * probably safe as the chip boundry is
+		      * a multiple of at least 16k...
+		      */
 		     if (flash_write(fs + offset + addr, data, ndata)) {
 			printf("install: can't write flash!\r\n");
 		     }
@@ -285,10 +309,16 @@ int flashInstall(void) {
       }
    }
 
-   /* lock all data...
-    */
-   printf("lock... "); fflush(stdout);
-   flash_lock(fs, ((char *)fe-(char *)fs));
+   for (i=0; i<2; i++) {
+      /* unlock all data -- except for iceboot (first 7 * 64K bytes)...
+       */
+      printf("chip %d: lock... ", i); fflush(stdout);
+      if (flash_unlock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to unlock %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      printf("\r\n");
+   }
 
    return 0;
 }

@@ -332,8 +332,7 @@ int flash_verify_addr(const void *addr) {
 }
 
 int flash_code_overlaps(void *from, void *to) {
-   /* ?!?!?? */
-   return 0;
+   return addrtochip(from)!=addrtochip(to);
 }
 
 int flash_init(void) { return 0; }
@@ -348,3 +347,4 @@ int flash_get_block_info(int *block_size) {
    return 0;
 }
 
+void *flash_chip_addr(int chip) { return blktoaddr(chip, 0); }

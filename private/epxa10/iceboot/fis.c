@@ -280,6 +280,14 @@ int fisCreate(const char *name, void *addr, int len) {
    int bloc = -1;
    struct fis_image_desc *nimg;
 
+   /* can't be bigger than 4MB (one chip)...
+    */
+   if (len<=0 || len>=4*1024*1024 - block_size) {
+      printf("fis create: invalid file size (%d), must be >0 and <4M\r\n",
+	     len);
+      return 1;
+   }
+
    if (img==NULL) {
       /* find an empty slot...
        */
@@ -388,7 +396,8 @@ int fisCreate(const char *name, void *addr, int len) {
 	    }
 	 }
 	 else {
-	    if (bloc + len < ents[idx*2+2]) {
+	    if ( (bloc + len < ents[idx*2+2]) && 
+		!flash_code_overlaps((void *) bloc, (void *)(bloc+len))) {
 	       /* found!!!
 		*/
 	       break;
@@ -417,7 +426,7 @@ int fisCreate(const char *name, void *addr, int len) {
 
       if (flash_write((void *)bloc, addr, len)) {
 	 printf("fis create: can't write: 0x%08x (%d) -> 0x%08x\r\n", 
-		addr, len, bloc);
+		(int)addr, len, bloc);
 	 return 1;
       }
       
@@ -468,9 +477,6 @@ int fisCreate(const char *name, void *addr, int len) {
 }
 
 /* initialize fis filesystem...
- *
- * FIXME: deal with the fact that
- * we have 2 flash chips...
  */
 int fisInit(void) {
    unsigned flash_start, flash_end;
@@ -478,6 +484,8 @@ int fisInit(void) {
    struct fis_image_desc *nimg;
    const struct fis_image_desc *dir;
    int stat, err = 0;
+   unsigned chip_start[2], chip_end[2];
+   int i;
 
    /* verify...
     */
@@ -491,30 +499,48 @@ int fisInit(void) {
       nr = read(0, &c, 1);
 
       if (nr==1) {
+	 printf("%c\r\n", c); fflush(stdout);
 	 if (toupper(c)=='Y') break;
 	 else if (toupper(c)=='N') { return 1; }
-	 write(1, &c, 1);
       }
    }
 
    flash_get_limits(NULL, (void **)&flash_start, (void **)&flash_end);
    flash_start += numReservedBlocks() * fisBlockSize();
 
-   /* unlock all data -- except for iceboot (first 7 * 64K bytes)...
-    */
-   printf("\r\nunlock... "); fflush(stdout);
-   flash_unlock((void *)flash_start, flash_end - flash_start);
+   chip_start[0] = flash_start;
+   chip_start[1] = (unsigned) flash_chip_addr(1);
+   chip_end[0] = chip_start[1]-1;
+   chip_end[1] = flash_end;
+
+   for (i=0; i<2; i++) {
+      /* unlock all data -- except for iceboot (first 7 * 64K bytes)...
+       */
+      printf("chip %d: unlock... ", i); fflush(stdout);
+      if (flash_unlock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to unlock %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      
+      /* erase all data -- except for iceboot...
+       */
+      printf("erase... "); fflush(stdout);
+      if (flash_erase((void *) chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to erase %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      
+      /* lock all data -- except for iceboot...
+       */
+      printf("lock... "); fflush(stdout);
+      if (flash_lock((void *) chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to lock %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+
+      printf("\r\n");
+   }
    
-   /* erase all data -- except for iceboot...
-    */
-   printf("erase... "); fflush(stdout);
-   flash_erase((void *) flash_start, flash_end - flash_start);
-
-   /* lock all data -- except for iceboot...
-    */
-   printf("lock... "); fflush(stdout);
-   flash_lock((void *)flash_start, flash_end - flash_start);
-
    /* setup directory -- with iceboot...
     */
    printf("setup directory... "); fflush(stdout);

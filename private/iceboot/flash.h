@@ -11,5 +11,4 @@ int flash_code_overlaps(void *from, void *to);
 int flash_init(void);
 int flash_get_limits(void *zero, void **flash_start, void **flash_end);
 int flash_get_block_info(int *block_size);
-int flash_n_chips(void);
 void *flash_chip_addr(int );
