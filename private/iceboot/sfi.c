@@ -8,11 +8,13 @@
 
 #include "stripe.h"
 #include "sfi.h"
+#include "stf/memtests.h"
 
 void delay(int);
 
 static void *memalloc(size_t );
 static void memfree(void *);
+static void initMemTests(void);
 
 static int blperr = 0;
 
@@ -933,3 +935,22 @@ void delay(int time)
 
 void *memalloc(size_t sz) { return malloc(sz); }
 void memfree(void *ptr) { free(ptr); }
+
+static void initMemTests(void) {
+  addConstantBucket("memtest-silent", (int) &silent_test);
+  addCFunc3Bucket("memtest-random-value", (CFunc3) test_random_value);
+  addCFunc3Bucket("memtest-xor-comparison", (CFunc3) test_xor_comparison);
+  addCFunc3Bucket("memtest-sub-comparison", (CFunc3) test_sub_comparison);
+  addCFunc3Bucket("memtest-mul-comparison", (CFunc3) test_mul_comparison);
+  addCFunc3Bucket("memtest-div-comparison", (CFunc3) test_div_comparison);
+  addCFunc3Bucket("memtest-or-comparison", (CFunc3) test_or_comparison);
+  addCFunc3Bucket("memtest-and-comparison", (CFunc3) test_and_comparison);
+  addCFunc3Bucket("memtest-seqinc-comparison", (CFunc3) test_seqinc_comparison);
+  addCFunc3Bucket("memtest-solidbits-comparison", (CFunc3) test_solidbits_comparison);
+  addCFunc3Bucket("memtest-checkerboard-comparison", (CFunc3) test_checkerboard_comparison);
+  addCFunc3Bucket("memtest-blockseq-comparison", (CFunc3) test_blockseq_comparison);
+  addCFunc3Bucket("memtest-walkbits-comparison", (CFunc3) test_walkbits_comparison);
+  addCFunc3Bucket("memtest-bitspread-comparison", (CFunc3) test_bitspread_comparison);
+  addCFunc3Bucket("memtest-bitflip-comparison", (CFunc3) test_bitflip_comparison);
+  addCFunc3Bucket("memtest-stuck-address", (CFunc3) test_stuck_address);
+}
