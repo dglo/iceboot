@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.103 $
+ * $Revision: 1.112 $
  * $Author: arthur $
- * $Date: 2004-03-16 17:42:39 $
+ * $Date: 2004-06-21 15:28:05 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -106,6 +106,7 @@
 #include "iceboot/flash.h"
 #include "iceboot/fis.h"
 #include "osdep.h"
+#include "md5.h"
 
 #define STR(a) #a
 #define STRING(a) STR(a)
@@ -955,6 +956,27 @@ static const char *reqBoot(const char *p) {
   return p;
 }
 
+static const char *md5sum(const char *p) {
+   int len = pop();
+   void *addr = (void *) pop();
+   unsigned char bin_buffer[128/8];
+   char *msg = (unsigned char *) calloc(128/4, 1);
+   int i;
+
+   memset(bin_buffer, 0, sizeof(bin_buffer));
+   md5_buffer(addr, len, bin_buffer);
+   for (i=0; i<128/8; i++) {
+      const char digit[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8',
+                             '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+      msg[i*2] = digit[(bin_buffer[i]>>4)&0xf];
+      msg[i*2+1] = digit[bin_buffer[i]&0xf];
+   }
+   push((int) msg);
+   push(128/4);
+   
+   return p;
+}
+
 /* copy integers from one location to another...
  * 
  * from to n
@@ -1051,12 +1073,14 @@ static const char *ymodem1k(const char *p) {
   const int bllen = 1024+2;
   unsigned char *block = (unsigned char *) memalloc(bllen);
   int blp = 0;
-  int i, firstblock = 1, blocknum, ndatabytes = 0;
+  int i, blocknum=0, ndatabytes = 0;
   unsigned char ack = 0x06;
   int crc = 1;
   char *addr = NULL;
-  unsigned char nak = 'C'; /* 0x15;*/
-  int filelen;
+  unsigned char nak = 'C'; /* 0x43;*/
+  int filelen = 0;
+  unsigned char CAN[2] = { 0x18, 0x18 };
+  int transferring = 0;
 
   /* continuously write 'C' until we get a packet...
    */
@@ -1074,6 +1098,7 @@ static const char *ymodem1k(const char *p) {
     if ((ret = read(0, &pkt, 1))!=1) {
       blperr = -1;
       push(0); push(0);
+      write(1, CAN, 2);
       return p;
     }
 
@@ -1097,11 +1122,11 @@ static const char *ymodem1k(const char *p) {
       read(0, &rnak, 1);
       write(1, &ack, 1);
       write(1, &nak, 1);
-      firstblock = 1;
+      transferring = 0;
       continue;
     }
     else {
-       printf("ymodem1k: unexpected character: 0x%02x [%c]\r\n", 
+       printf("ymodem1k: unexpected start character: 0x%02x [%c]\r\n", 
 	      pkt, pkt);
 
       blperr = pkt&0xff;
@@ -1116,6 +1141,7 @@ static const char *ymodem1k(const char *p) {
       int nr = read(0, blknum+blp, 2 - blp);
       if (nr<=0) {
 	blperr = -3;
+        write(1, CAN, 2);
 	push(0); push(0);
 	return p;
       }
@@ -1124,98 +1150,95 @@ static const char *ymodem1k(const char *p) {
 
     if ( blknum[0] !=  ((~blknum[1])&0xff) ) {
       blperr = -4;
+      write(1, CAN, 2);
       push(0); push(0);
       return p;
     }
 
-    if (firstblock) {
-      firstblock = 0;
-      
-      if (blknum[0] == 0) {
-	/* filename block
-	 */
-	blocknum = 0;
-      }
-      else if (blknum[0] == 1) {
-	/* data block...
-	 */
-	blocknum = 1;
-      }
-      else {
-	blperr = -6;
-	push(0);
-	push(0);
-	return p;
-      }
+    if (pkt==0x01 && blknum[0]==0 && !transferring) {
+       /* start of frame -- header block... */
+       blocknum=0;
+       transferring=0;
     }
     else {
-      if (blknum[0] != (blocknum & 0xff)) {
-	blperr = -5;
-	push(0);
-	push(0);
-	return p;
-      }
-    }
+       /* blocknum must match!!! */
+       if (blknum[0] != (blocknum & 0xff)) {
+          /* fixme, we should just start over here...
+           */
+          blperr = -5;
+          write(1, CAN, 2);
+          push(0);
+          push(0);
+          return p;
+       }
 
+       transferring = 1;
+    }
+    
+    /* read the data portion of the packet... */
     nr = pktsz + crc + 1;
     blp = 0;
     while (blp<nr) {
-      int ret;
-      if ((ret=read(0, block + blp, nr-blp))<=0) {
-	blperr = -7;
-	push(0);
-	push(0);
-	return p;
-      }
-      blp+=ret;
+       int ret;
+       if ((ret=read(0, block + blp, nr-blp))<=0) {
+          blperr = -7;
+          write(1, CAN, 2);
+          push(0);
+          push(0);
+          return p;
+       }
+       blp+=ret;
     }
-
+    
     /* check crc...
      */
     if (crc) {
-      unsigned short v = 0;
-      for (i=0; i<nr; i++) v = updcrc(block[i], v);
-
-      if (v!=0) {
-	blperr = -8;
-	push(0);
-	push(0);
-	return p;
-      }
+       unsigned short v = 0;
+       for (i=0; i<nr; i++) v = updcrc(block[i], v);
+       
+       if (v!=0) {
+          blperr = -8;
+          write(1, CAN, 2);
+          push(0);
+          push(0);
+          return p;
+       }
     }
-
+    
     /* send ack...
      */
     write(1, &ack, 1);
-
+    
+    /* first packet has the name... */
     if (blocknum==0) {
-      int i;
-
-      /* parse name...
-       */
-      for (i=0; i<pktsz; i++) if (block[i]==0) break;
-      
-      if (i==0) {
-	write(1, &nak, 1);
-	break;
-      }
-
-      /* parse length...
-       */
-      filelen = atoi(block + i + 1);
-
-      if (filelen>0) {
-	addr = (char *) memalloc(filelen);
-      }
-
-      write(1, &nak, 1);
+       int i;
+       
+       /* parse name...
+        */
+       for (i=0; i<pktsz; i++) if (block[i]==0) break;
+       
+       if (i==0) {
+          write(1, &nak, 1);
+          break;
+       }
+       
+       /* parse length...
+        */
+       filelen = atoi(block + i + 1);
+       
+       if (filelen>0) {
+          addr = (char *) memalloc(filelen);
+       }
+       
+       write(1, &nak, 1);
     }
     else {
-      int tocp = (ndatabytes+pktsz > filelen) ? (filelen - ndatabytes) : pktsz;
-      memcpy(addr + ndatabytes, block, tocp);
-      ndatabytes+=tocp;
+       int tocp = 
+          (ndatabytes+pktsz > filelen) ? (filelen - ndatabytes) : pktsz;
+       memcpy(addr + ndatabytes, block, tocp);
+       ndatabytes+=tocp;
     }
-
+    
     blocknum++;
   }
 
@@ -1288,6 +1311,14 @@ static int interpret(int addr, int nbytes) {
  */
 static int do_fpga_config(int addr, int nbytes) {
    return fpga_config((int *) addr, nbytes);
+}
+
+/* re-program flasher board cpld...
+ *
+ * returns: 0 ok, non-zero error...
+ */
+static int do_fb_cpld_config(int addr, int nbytes) {
+   return fb_cpld_config((int *) addr, nbytes);
 }
 
 static const char *sdup(const char *p) {
@@ -1383,7 +1414,17 @@ static const char *odumpt(const char *p) {
    return p;
 }
 
-static const char *reboot(const char *p) {
+static const char *flashReboot(const char *p) {
+   halSetFlashBoot();
+   return p;
+}
+
+static const char *serialReboot(const char *p) {
+   halClrFlashBoot();
+   return p;
+}
+
+static const char *rebootDOM(const char *p) {
    halBoardReboot();
    return p;
 }
@@ -1838,13 +1879,16 @@ static const char *fpgaVersions(const char *p) {
    return p;
 }
 
-/* we do our own buffering for stdout -- up to 128 chars...
+/* we do our own buffering for stdout...
  */
 static int  soBufLen = 0;
 static char soBuf[256];
 
 static void soPutm(const char *s, const int len) {
-   if (soBufLen+len>=sizeof(soBuf)-1) longjmp(jenv, EXC_LINE_TOO_LONG);
+   if (soBufLen+len>=sizeof(soBuf)-1) {
+      soBufLen=0;
+      longjmp(jenv, EXC_LINE_TOO_LONG);
+   }
    memcpy(soBuf + soBufLen, s, len);
    soBufLen += len;
 }
@@ -1894,6 +1938,430 @@ static void prtErr(int err) {
 
 static int isInputData(void) { return halIsInputData(); }
 
+#define PSKHACK
+#undef PSKHACK
+
+#if defined(PSKHACK)
+
+/* HACK!!! -- don't forget to take these lines out!!! */
+#define CORDICBITS 15
+#include "../../crdc.c"
+
+/* collect a bunch of angles...
+ */
+static const char *scanAngles(const char *p) {
+   const int nAngles = pop();
+   short *mem = (short *) 0x01000000;
+   int i;
+   #define PSKSTAT ( * (unsigned volatile *) 0x9008100c )
+   #define PSKSIN  ( * (unsigned volatile *) 0x90081010 )
+   #define PSKCOS  ( * (unsigned volatile *) 0x90081014 )
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+   
+   for (i=0; i<nAngles; i++, mem++) {
+      /* wait for new phase... */
+      while ( ((PSKSTAT ^ PSKSTAT)&1) == 0) ;
+      *mem = getPhase(PSKSIN, PSKCOS);
+   }
+
+   #undef PSKSTAT
+   #undef PSKSIN
+   #undef PSKCOS
+   return p;
+}
+
+static const char *dumpCordic(const char *p) {
+   int i;
+   short *mem = (short *) 0x01000000;
+   const int pattern = pop();
+   const int ntries = pop();
+   unsigned lastStat;
+
+   /* step size is in 2*pi*maxint ... */
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+
+   lastStat = PSKSTAT;
+   for (i=0; i<ntries; i++, mem++) {
+
+      if (i==4) (* (unsigned volatile *) 0x90081038) = pattern;
+      
+      /* wait for new phase... */
+      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+      /* mark our new phase... */
+      lastStat = PSKSTAT;
+
+      /* wait 1us for cordic to be ready... */
+      halUSleep(1);
+
+      /* get the cordic value */
+      *mem = PSKCORDIC;
+   }
+   #undef PSKSTAT
+   #undef PSKCORDIC
+
+   return p;
+}
+
+static const char *dumpIQ(const char *p) {
+   int i;
+   unsigned *mem = (unsigned *) 0x01000000;
+   const int ntries = pop();
+   unsigned lastStat;
+
+   /* step size is in 2*pi*maxint ... */
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKI      ( * (unsigned volatile *) 0x90081010 )
+   #define PSKQ      ( * (unsigned volatile *) 0x90081014 )
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+
+   lastStat = PSKSTAT;
+   for (i=0; i<ntries; i++, mem++) {
+      /* wait for new phase... */
+      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+      /* mark our new phase... */
+      lastStat = PSKSTAT;
+
+      /* wait 1us for cordic to be ready... */
+      halUSleep(1);
+
+      /* get the cordic value */
+      *mem = PSKI; mem++;
+      *mem = PSKQ;
+   }
+   #undef PSKSTAT
+   #undef PSKI
+   #undef PSKQ
+
+   return p;
+}
+
+static inline void setRxOsc(unsigned char phase, unsigned short rate) {
+   *(unsigned volatile *)0x90081008 = 1|(phase<<8)|(rate<<16);
+}
+
+static inline void setTxOsc(unsigned short gain, unsigned short rate) {
+   *(unsigned volatile *)0x90081000 = 1|(gain<<8)|(rate<<16);
+}
+
+static void pskLock(int channel) {
+   unsigned lastStat;
+   int nok = 0;
+   short phase = 0;
+   short minorAdjust = 0;
+   unsigned short rate = 1<<(channel+4);
+   static int offset = 0; /* HACK: cycle offsets */
+   short offsetMask = (3>>(2-channel));
+   
+   /* step size is in 2*pi*maxint ... */
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
+
+   /* HACK: cycle offset gets updated... */
+   offset++; offset|=offsetMask;
+
+   /* setup the oscillator */
+   setRxOsc( (offset<<8)|phase, rate);
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+
+   lastStat = PSKSTAT;
+   while (nok<8) {
+      /* wait for new cycle... */
+      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+      /* mark our new phase... */
+      lastStat = PSKSTAT;
+
+      /* wait 1us for cordic to be ready... */
+      halUSleep(1);
+
+      /* is it ok? */
+      {  const short angle = PSKCORDIC;
+         const int angleThreshold = 4; /* 1 part in 64 (too loose?) */
+         const int correction = angle>>8;
+         const int ok = abs(correction) < angleThreshold;
+
+#if 0
+         printf("angle=%hd correction=%hd minor=%hd phase=%hd offset=%hd\r\n", 
+                angle, correction, minorAdjust, phase, offset);
+#endif
+
+         if (ok) {
+            nok++; 
+            minorAdjust += correction;
+         }
+         else {
+            nok=0;
+            minorAdjust = 0;
+            
+            /* adjust angle -- use only top 8 bits of angle... */
+            phase += correction;
+            setRxOsc((offset<<8)|phase, rate);
+               
+            /* wait for another cycle */
+            while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+            /* mark our new phase... */
+            lastStat = PSKSTAT;
+         }
+      }
+   }
+
+   /* make minor adjustment... */
+   phase += minorAdjust>>3;
+   setRxOsc((offset<<8)|phase, rate);
+
+#if 0
+   printf("final phase: %hd\r\n", phase);
+#endif
+
+   #undef PSKSTAT
+   #undef PSKCORDIC
+}
+
+static const char *doPskLock(const char *p) {
+   pskLock(pop());
+   return p;
+}
+
+#if 0
+/* sync to channel ch -- assume a 10101010 pattern
+ * already established on ... */
+static void pskSync(int channel) {
+   unsigned lastStat;
+   int nok = 0;
+   short phase = 0;
+   short minorAdjust = 0;
+   unsigned short rate = 1<<(channel+4);
+
+   /* step size is in 2*pi*maxint ... */
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKCORDIC ( * (unsigned volatile *) 0x90081020 )
+
+   /* setup the oscillator */
+   setRxOsc(phase, rate);
+
+   /* HACK: make sure table is computed... */
+   (void) getPhase(0, 0);
+
+   lastStat = PSKSTAT;
+   while (nok<8) {
+      /* wait for new cycle... */
+      while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+      /* mark our new phase... */
+      lastStat = PSKSTAT;
+
+      /* wait 1us for cordic to be ready... */
+      halUSleep(1);
+
+      /* is it ok? */
+      {  const short angle = PSKCORDIC;
+         const int angleThreshold = 8; /* 1 part in 32 (too loose) */
+         const int correction = angle>>8;
+         const int ok = abs(correction) < angleThreshold;
+
+         printf("angle=%hd correction=%hd minor=%hd phase=%hd\r\n", 
+                angle, correction, minorAdjust, phase);
+
+         if (ok) {
+            nok++; 
+            minorAdjust += correction;
+         }
+         else {
+            nok=0;
+            minorAdjust = 0;
+   
+            /* adjust angle -- use only top 8 bits of angle... */
+            phase += correction;
+            setRxOsc(phase, rate);
+               
+            /* wait for another cycle */
+            while ( ((lastStat ^ PSKSTAT)&1) == 0) ;
+
+            /* mark our new phase... */
+            lastStat = PSKSTAT;
+         }
+      }
+   }
+
+   /* make minor adjustment... */
+   phase += minorAdjust>>3;
+   setRxOsc(phase, rate);
+   printf("final phase: %hd\r\n", phase);
+
+   #undef PSKSTAT
+   #undef PSKCORDIC
+}
+#endif
+
+/* go into psk echo mode -- never comes out... */
+static int pskEchoMode(int ich, int och, int npackets) {
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKRX     ( * (unsigned volatile *) 0x90081024 )
+   #define PSKTX     ( * (unsigned volatile *) 0x90081038 )
+
+   int lastSend = 0;
+
+   /* phase lock */
+   printf("echo mode phase lock...\r\n");
+   pskLock(0);
+
+   printf("emit carrier...\r\n");
+
+#if 0   
+   /* wait for sync bits msg */
+
+   
+   {  unsigned lastStat = PSKSTAT & 2;
+      int i;
+   
+      for (i=0; i<npackets; i++) {
+         /* wait for something in rx register... */
+         printf("wait tx...\r\n");
+         while ( ((lastStat ^ PSKSTAT)&2) == 0) ;
+
+         /* mark the new status */
+         lastStat = PSKSTAT;
+
+         /* wait for next time slot... */
+         while (lastSend<20*40) {
+            halUSleep(1);
+            lastSend++;
+         }
+         
+         /* copy word... */
+         PSKTX = PSKRX;
+         lastSend = 0;
+         
+         printf("lock...\r\n");
+         pskLock(ich);
+
+         halUSleep(1);
+         lastSend++;
+      }
+   }
+#endif
+
+   return npackets;
+
+   #undef PSKSTAT
+   #undef PSKRX
+   #undef PSKTX
+}
+
+/* start an echo test... */
+static int pskEchoTest(int ich, int channel, int npackets) {
+   #define PSKSTAT   ( * (unsigned volatile *) 0x9008100c )
+   #define PSKRX     ( * (unsigned volatile *) 0x90081024 )
+   #define PSKTX     ( * (unsigned volatile *) 0x90081038 )
+   #define PSKTXSTAT ( * (unsigned volatile *) 0x90081004 )
+
+   unsigned queue[8];
+   const unsigned nq = sizeof(queue)/sizeof(queue[0]);
+   unsigned qh=0, qt=0;
+   int nerrs = 0;
+   int i;
+   unsigned rn = 0;
+   int us = 0;
+   unsigned short rate = 1<<(channel+4);
+
+   /* setup tx osc... */
+   setTxOsc(4, rate);
+
+   /* lock to input... */
+   pskLock(ich);
+   
+   {  unsigned lastStat = PSKSTAT & 2;
+      int nr = 0, nw = 0;
+      unsigned lastBusy = PSKTXSTAT;
+      
+      while (nr<npackets) {
+
+         if (us>1000*3) {
+            printf("psk-echo-test: timeout!\r\n");
+            printf(" nr=%d nw=%d nerrs=%d\r\n", nr, nw, nerrs);
+            printf(" qh=%u qt=%u nq=%u\r\n", qh, qt, nq);
+            printf(" us=%u\r\n", us);
+            printf(" PSKSTAT=%08x PSKTXSTAT=%08x\r\n", PSKSTAT, PSKTXSTAT);
+            return nerrs;
+         }
+         
+         if (lastBusy ^ PSKTXSTAT) {
+            unsigned newBusy = PSKTXSTAT;
+            printf("tx busy change: %d -> %d\n", lastBusy, newBusy);
+            lastBusy = newBusy;
+         }
+
+         /* anything read? ... */
+         if ( ((lastStat ^ PSKSTAT)&2) == 0) {
+            /* no, stuff another packet out if there is room... */
+            if (qh-qt<nq && nw<npackets && us>1000) {
+               queue[qh%nq] = rn = rn*69069+1;
+               qh++;
+               PSKTX = rn;
+               lastBusy = PSKTXSTAT;
+               us = 0;
+               nw++;
+               halUSleep(1000);
+#if 0
+            }
+         }
+         else {
+#endif
+            /* mark the new status */
+            lastStat = PSKSTAT;
+
+            /* mark packet read... */
+            nr++;
+
+            /* check the value returned... */
+            if (qh!=qt) {
+               unsigned v = queue[qt%nq];
+               const unsigned rx = PSKRX;
+               
+               qt++;
+               if (v!=rx) {
+                  printf("error: expected=%08x read=%08x [%08x]\r\n",
+                         v, rx, v^rx);
+                  nerrs++;
+               }
+            }
+            else {
+               printf("error: received a packet, yet no packet was sent!\r\n");
+               nerrs++;
+            }
+         }
+#if 1 
+      }
+#endif
+
+         halUSleep(1);
+         us++;
+      }
+   }
+   
+   return nerrs;
+
+   #undef PSKSTAT
+   #undef PSKRX
+   #undef PSKTX
+   #undef PSKTXSTAT
+}
+
+#endif
+
 int main(int argc, char *argv[]) {
   char *line;
   const int linesz = 256;
@@ -1931,7 +2399,10 @@ int main(int argc, char *argv[]) {
      { "usleep", udelay },
      { "od", odump },
      { "odt", odumpt },
-     { "reboot", reboot },
+     { "reboot", rebootDOM },
+     { "md5sum", md5sum },
+     { "boot-serial", serialReboot },
+     { "boot-flash", flashReboot },
      { "analogMuxInput", analogMuxInput },
      { "prtTemp", prtTemp },
      { "swicmd", swicmd },
@@ -1974,6 +2445,12 @@ int main(int argc, char *argv[]) {
      { "enableLED", enableLED },
      { "disableLED", disableLED },
      { "setLEDdelay", setLEDdelay },
+#if defined(PSKHACK)
+     { "scan-angles", scanAngles },
+     { "dump-cordic", dumpCordic },
+     { "dump-iq", dumpIQ },
+     { "psk-lock", doPskLock },
+#endif
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -2027,10 +2504,11 @@ int main(int argc, char *argv[]) {
     { "swap", swap },
     { "fpga", do_fpga_config },
     { "interpret", interpret },
+    { "fb-cpld", do_fb_cpld_config },
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
 
-#if 0
+#if defined(PSKHACK)
   static struct {
     const char *nm;
     CFunc3 cf;
@@ -2038,7 +2516,10 @@ int main(int argc, char *argv[]) {
      /* don't forget to document these commands
       * at the top of this file!
       */
-    { "flashBurn", flashBurn },
+#if defined(PSKHACK)
+    { "psk-echo-mode", pskEchoMode },
+    { "psk-echo-test", pskEchoTest },
+#endif
   };
   const int nInitCFuncs3 = sizeof(initCFuncs3)/sizeof(initCFuncs3[0]);
 #endif
@@ -2091,7 +2572,7 @@ int main(int argc, char *argv[]) {
   for (i=0; i<nInitCFuncs2; i++) 
     addCFunc2Bucket(initCFuncs2[i].nm, initCFuncs2[i].cf);
 
-#if 0
+#if defined(PSKHACK)
   for (i=0; i<nInitCFuncs3; i++) 
     addCFunc3Bucket(initCFuncs3[i].nm, initCFuncs3[i].cf);
 #endif

@@ -454,6 +454,14 @@ exec it (run it).
 }
 
 \cmd{false}{}{false}{return false (0)}
+
+\cmd{fb-cpld}{xsvfAddress xsvfLength}{status}{Program the flasher board
+CPLD with the XSVF file at xsvfAddress with length xsvfLength, return 
+status = 0 if all is ok, otherwise return error code.}
+\example{ $>$ s" flasher.xsvf" find if fb-cpld endif}{Program the
+flasher board CPLD with the XSVF file named flasher.xsvf in the flash 
+filesystem}
+
 \cmd{find}{nameAddress nameLength}{fileAddress fileLength status}{
         find the file with name at nameAddress of length nameLength
 and return it's address and length to the stack if status=1, if status=0

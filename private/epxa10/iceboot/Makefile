@@ -1,6 +1,6 @@
 #
 # makefile for iceboot, not useful without being called
-# by a workspace makefile, see iceboot-ws/Makefile for
+# by a workspace makefile, see dom-ws/Makefile for
 # details...
 #
 .SUFFIXES: .c .o .elf .bin
@@ -20,7 +20,8 @@ clean:
 	$(LD) --script=$(RAWX) -o $*-raw.elf $*-raw.o
 	$(OBJCOPY) -O binary $*-raw.elf $*.bin
 
-SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o fis.o install.o
+SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o fis.o install.o \
+	md5.o
 YMOBJS = $(CRT0) $(LIBK) ymodem.o osdep.o
 LBOBJS = $(CRT0) $(LIBK) lookback.o
 

@@ -3,15 +3,16 @@
 # by a workspace makefile, see iceboot-ws/Makefile for
 # details...
 #
-.c.o:
-	$(CC) -c $(CFLAGS) $<
+#.c.o:
+#	$(CC) -c $(CFLAGS) $<
 
 all: $(ICEBOOTBIN)
 
 clean:
 	rm -f *.o *.i *.bin *.elf *.hex *.gz nfis.c
 
-SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o nfis.o install.o
+SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o nfis.o \
+	install.o md5.o
 
 sfi.o: sfi.c $(EPXAH)
 memtests.o: memtests.c $(EPXAH)
