@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.116 $
- * $Author: jkelley $
- * $Date: 2004-09-27 15:00:38 $
+ * $Revision: 1.116.2.1 $
+ * $Author: arthur $
+ * $Date: 2004-11-24 19:48:19 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1018,13 +1018,130 @@ static const char *setLEDdelay(const char *p) {
 }
 
 static const char *enableFB(const char *p) {
-   hal_FB_enable();
-   return p;
+    int err, config_t, valid_t;    
+    err = hal_FB_enable(&config_t, &valid_t);
+    if (err != 0) {
+        switch(err) {
+        case FB_HAL_ERR_CONFIG_TIME:
+            printf("Error: flasherboard configuration time too long\r\n");
+            break;
+        case FB_HAL_ERR_VALID_TIME:
+            printf("Error: flasherboard clock validation time too long\r\n");
+            break;
+        default:
+            printf("Error: unknown flasherboard enable failure\r\n");
+            break;
+        }
+    }
+    push(valid_t);
+    push(config_t);
+    push(err);
+    return p;
+}
+
+static const char *enableFBmin(const char *p) {
+    hal_FB_enable_min();
+    return p;
 }
 
 static const char *disableFB(const char *p) {
    hal_FB_disable();
    return p;
+}
+
+static const char *setFBbrightness(const char *p) {
+    if (hal_FB_isEnabled()) {
+        int value = pop();
+        hal_FB_set_brightness(value);
+    }
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");
+
+    return p;
+}
+
+static const char *setFBwidth(const char *p) {
+    if (hal_FB_isEnabled()) {
+        int value = pop();
+        hal_FB_set_pulse_width(value);
+    }
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");
+    return p;
+}
+
+static const char *setFBenables(const char *p) {
+    if (hal_FB_isEnabled()){ 
+        int value = pop();
+        hal_FB_enable_LEDs(value);
+    }
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");
+    return p;
+}
+
+static const char *setFBmux(const char *p) {
+    if (hal_FB_isEnabled()) {
+        int value = pop();
+        hal_FB_select_mux_input(value);
+    }
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");
+    return p;
+}
+
+static const char *startFBflashing(const char *p) {
+    if (hal_FB_isEnabled())
+        hal_FPGA_TEST_start_FB_flashing();
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");
+    return p;
+}
+
+static const char *stopFBflashing(const char *p) {
+    if (hal_FB_isEnabled())
+        hal_FPGA_TEST_stop_FB_flashing();
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");    
+    return p;
+}
+
+static int getFBfw(void) {
+    int version = 0;
+    if (hal_FB_isEnabled())
+        version = hal_FB_get_fw_version();
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");
+    return version;
+
+}
+
+static int getFBhw(void) {
+    int version = 0;
+    if (hal_FB_isEnabled())
+        version = hal_FB_get_hw_version();
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");    
+    return version;
+}
+
+static const char *setFBdcdc(const char *p) {
+    if (hal_FB_isEnabled()) {
+        int value = pop();
+        hal_FB_set_DCDCen(value);
+    }
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");    
+    return p;
+}
+
+static int getFBdcdc(void) {
+    int val = -1;
+    if (hal_FB_isEnabled())
+        val = hal_FB_get_DCDCen();
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");    
+    return val;
 }
 
 /* crctab calculated by Mark G. Mendel, Network Systems Corporation */
@@ -1563,9 +1680,30 @@ static const char *hvid(const char *p) {
 }
 
 static const char *fbid(const char *p) {
-   const char *id = hal_FB_get_serial();
-   push((int) id);
-   push(strlen(id));
+    char **id = 0;
+    int err;
+    if (hal_FB_isEnabled()) {        
+        err = hal_FB_get_serial(id);
+        if (err == 0) {
+            push((int)(*id));
+            push(strlen(*id));
+        }
+        else {
+            switch(err) {
+            case FB_HAL_ERR_ID_NOT_PRESENT:
+                printf("Error: flasherboard ID chip not detected\r\n");
+                break;
+            case FB_HAL_ERR_ID_BAD_CRC:
+                printf("Error: flasherboard ID CRC failure\r\n");
+                break;
+            default:
+                printf("Error: unknown flasherboard ID failure\r\n");
+                break;
+            }
+        }
+    }
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");
    return p;
 }
 
@@ -2475,9 +2613,17 @@ int main(int argc, char *argv[]) {
      { "enableLED", enableLED },
      { "disableLED", disableLED },
      { "setLEDdelay", setLEDdelay },
-     { "enableFB", enableFB },
+     { "enableFB", enableFB},
+     { "enableFBmin", enableFBmin},
      { "disableFB", disableFB },
      { "fbid", fbid },
+     { "setFBbrightness", setFBbrightness },
+     { "setFBwidth", setFBwidth },
+     { "setFBenables", setFBenables },
+     { "setFBmux", setFBmux },
+     { "startFBflashing", startFBflashing },
+     { "stopFBflashing", stopFBflashing },
+     { "setFBdcdc", setFBdcdc },
 #if defined(PSKHACK)
      { "scan-angles", scanAngles },
      { "dump-cordic", dumpCordic },
@@ -2500,6 +2646,9 @@ int main(int argc, char *argv[]) {
      { "readBaseDAC", readBaseDAC },
      { "readBaseADC", readBaseADC },
      { "readPressure", readPressure },
+     { "getFBfw", getFBfw },
+     { "getFBhw", getFBhw },
+     { "getFBdcdc", getFBdcdc },
   };
   const int nInitCFuncs0 = sizeof(initCFuncs0)/sizeof(initCFuncs0[0]);
 

@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "iceboot/sfi.h"
@@ -265,8 +266,11 @@ int fb_cpld_config(int *p, int nbytes) {
         return 1;
     }
 
-    /* Turn on flasherboard */
-    hal_FB_enable();
+    /* Check to make sure flasherboard is powered */
+    if (!hal_FB_isEnabled()) {
+        printf("Please power the flasherboard with enableFB first!\r\n");
+        return 1;
+    }
     
     /* Enable JTAG in PLD and FPGA */
     hal_FPGA_TEST_FB_JTAG_enable();

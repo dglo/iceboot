@@ -446,7 +446,11 @@ line feed character address and length to the stack}
 dom id string}
 \cmd{drop}{}{}{Drop the top stack element}
 \cmd{dup}{a}{a a}{Duplicate the top stack element}
-\cmd{enableFB}{}{}{Enable and power-up the flasherboard}
+\cmd{enableFB}{}{configtime validtime status}{ Enable and power-up the
+  flasherboard.  Returns status (0=success) or error code, along with
+  diagnostic timing information.  configtime is the time required to
+  configure the CPLD, in us, and validtime is the time required for
+  the clock to stabilize during power-up (also in us). }
 \cmd{enableHV}{}{}{Enable PMT high-voltage base}
 \cmd{enableLED}{}{}{Enable the onboard LED}
 \cmd{exec}{execAddress execLength}{}{Execute the program at execAddress with
@@ -486,6 +490,14 @@ all is ok, otherwise return error code.}
 fpga with the sbi file named stf.sbi in the flash filesystem}
 
 \cmd{free}{address}{}{Free allocated data at address.}
+
+\cmd{getFBdcdc}{enabled}{}{ Get the enabled/disabled status of the DC/DC
+  converter on the flasherboard which drives the LEDs }
+\cmd{getFBfw}{version}{}{ Get the firmware version of the flasherboard CPLD
+  }
+\cmd{getFBhw}{version}{}{ Get the hardware (PCB artwork) version of the 
+  flasherboard }
+
 \cmd{gunzip}{dataAddress dataLength}{destAddress destLength}{
         Unzip a gzip file at dataAddress of length dataLength and
 put the resulting data in destAddress with length destLength.  if
@@ -554,8 +566,23 @@ called unused.data on the flash filesystem}
 \cmd{rshift}{value shift}{result}{ result = value right shifted shift}
 \cmd{s`` words''}{}{wordsAddress wordsLength}{return string at wordsAddress
 with length wordsLength}
+
+\cmd{setFBbrightness}{level}{}{ Set the flasherboard brightness level}
+\cmd{setFBenables}{enable mask}{} { Set the mask which enables the
+  individual flasherboard LEDs }
+\cmd{setFBmux}{channel}{}{ Select which LED current is muxed back to the
+  mainboard.  An argument of 0 disables the mux, while 13 selects the TTL
+  driver pulse. }
+\cmd{setFBwidth}{width}{}{ Set the flasherboard pulse width }
+\cmd{setFBdcdc}{}{enable}{ Enable/disable the DC/DC converter on the
+  flasherboard which drives the LEDs }
+
 \cmd{setLEDdelay}{delay}{}{ Set the launch delay from the onboard LED to
   the ATWD trigger.  Delay time is (2+\textit{delay})*25ns.}
+
+\cmd{startFBflashing}{}{}{ Start flashing the flasherboard }
+\cmd{stopFBflashing}{}{}{ Stop flashing the flasherboard }
+
 \cmd{swap}{}{}{ swap the two top words of the stack}
 \cmd{true}{}{result}{return a true result (-1)}
 \cmd{type}{stringAddress stringLength}{}{print string at stringAddress
