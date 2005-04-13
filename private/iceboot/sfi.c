@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.116.2.2 $
+ * $Revision: 1.116.2.3 $
  * $Author: arthur $
- * $Date: 2005-03-15 22:56:41 $
+ * $Date: 2005-04-14 00:08:25 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1044,6 +1044,25 @@ static const char *enableFB(const char *p) {
 }
 
 static const char *enableFBmin(const char *p) {
+    
+    /* Warn users of risks... */
+    while (1) { 
+        char c;
+        int nr;
+        
+        printf("enableFBmin: LEDs may come on (steady-state) on older flasherboards.\r\n");
+        printf("Use enableFB unless CPLD state prevents it!  Continue [y/n]? ");
+        fflush(stdout);
+        
+        nr = read(0, &c, 1);
+        
+        if (nr==1) {
+            printf("%c\r\n", c); fflush(stdout);
+            if (toupper(c)=='Y') break;
+            else if (toupper(c)=='N') { return p; }
+        }
+    }
+    
     hal_FB_enable_min();
     return p;
 }
