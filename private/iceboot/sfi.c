@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.116.2.3 $
+ * $Revision: 1.116.2.4 $
  * $Author: arthur $
- * $Date: 2005-04-14 00:08:25 $
+ * $Date: 2005-05-16 21:43:49 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1152,6 +1152,16 @@ static const char *setFBdcdc(const char *p) {
     if (hal_FB_isEnabled()) {
         int value = pop();
         hal_FB_set_DCDCen(value);
+    }
+    else
+        printf("Please power the flasherboard with enableFB first!\r\n");    
+    return p;
+}
+
+static const char *setFBrate(const char *p) {
+    if (hal_FB_isEnabled()) {
+        int value = pop();
+        hal_FPGA_TEST_FB_set_rate(value);
     }
     else
         printf("Please power the flasherboard with enableFB first!\r\n");    
@@ -2647,6 +2657,7 @@ int main(int argc, char *argv[]) {
      { "startFBflashing", startFBflashing },
      { "stopFBflashing", stopFBflashing },
      { "setFBdcdc", setFBdcdc },
+     { "setFBrate", setFBrate },
 #if defined(PSKHACK)
      { "scan-angles", scanAngles },
      { "dump-cordic", dumpCordic },
