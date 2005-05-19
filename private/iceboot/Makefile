@@ -3,27 +3,21 @@
 # by a workspace makefile, see iceboot-ws/Makefile for
 # details...
 #
-#.c.o:
-#	$(CC) -c $(CFLAGS) $<
+.c.o:
+	$(CC) -c $(CFLAGS) $<
 
-all: $(ICEBOOTBIN)
+all: $(ICEBOOT)
 
 clean:
-	rm -f *.o *.i *.bin *.elf *.hex *.gz nfis.c
+	rm -f *.o *.i *.bin *.elf *.hex *.gz
 
-SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o nfis.o \
-	install.o md5.o
+SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o fis.o
 
 sfi.o: sfi.c $(EPXAH)
 memtests.o: memtests.c $(EPXAH)
 flashdrv.o: flashdrv.c flash.h $(EPXAH)
 osdep.o: osdep.c osdep.h $(EPXAH)
-nfis.c: ../../epxa10/iceboot/fis.c
-	cp -v ../../epxa10/iceboot/fis.c nfis.c
-nfis.o: nfis.c fis.h $(EPXAH)
+fis.o: fis.c fis.h $(EPXAH)
 
-$(ICEBOOTBIN): $(SFIOBJS) $(LIBHAL)
-	$(CC) -c $(CFLAGS) versions.c
-	$(CC) -g -o $(ICEBOOTBIN) versions.o $(SFIOBJS) $(LIBHAL) $(SYSLIBS)
-
-
+$(ICEBOOTBIN): $(SFIOBJS)
+	$(CC) -o $(ICEBOOTBIN) $(SFIOBJS) $(SYSLIBS)

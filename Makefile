@@ -1,5 +1,4 @@
-PROJECT := iceboot
+PROJECT := icecube
 PLATFORM := Linux-i386
-ICESOFT_HOST := Linux-i386
 
 -include project.mk
