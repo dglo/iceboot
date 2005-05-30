@@ -345,7 +345,7 @@ int test_bitflip_comparison (ui32 *bp1, ui32 *bp2, ui32 count) {
 	  p2 = (volatile ui32 *) bp2;
 	  for (i = 0; i < count; i++, p1++, p2++) {
 	      *p1 = *p2 = (i % 2) == 0 ? q : ~q;
-	      if (verifyWords(p1, p2, i)) return ERROR;
+	      if (verifyWords((ui32 *) p1, (ui32 *) p2, i)) return ERROR;
 	  }
 	}
     }
@@ -410,7 +410,7 @@ int test_thorsten16(ui32 *bp, ui32 *unused, ui32 count) {
    for (i=0; i<count; i++, bp++) {
       const unsigned addr = (unsigned) bp;
       const ui32 ev = ((addr>>5)&1 ? 0xffffffff : 0)&0xffff;
-      if (verifyWords((ui32 *)bp, &ev, i)) return ERROR;
+      if (verifyWords((ui32 *)bp, (ui32 *) &ev, i)) return ERROR;
    }
 
    return err;
