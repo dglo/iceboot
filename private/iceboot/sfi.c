@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.124 $
- * $Author: arthur $
- * $Date: 2005-05-19 20:42:37 $
+ * $Revision: 1.125 $
+ * $Author: jkelley $
+ * $Date: 2005-07-01 14:09:04 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1627,7 +1627,7 @@ static const char *prtTemp(const char *p) {
 
 static int readPressure(void) {  
 
-    unsigned int loop_cnt = 1000;
+    unsigned int loop_cnt = 50;
     unsigned long pressure_sum = 0;
     unsigned long voltage_sum = 0;
     float mean_pressure, mean_voltage;
