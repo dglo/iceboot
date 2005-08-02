@@ -593,7 +593,7 @@ with length stringLength}
 nameAddress with length nameLength}
 \cmd{usleep}{us}{}{sleep for us microseconds}
 
-\cmd{writeActiveBaseDAC}{value}{}{write value to PMT active base DAC}
+\cmd{writeActiveBaseDAC}{channel value}{}{write value to PMT active base DAC}
 
 \cmd{writeDAC}{channel value}{}{write value to DAC channel.
 \medskip \\
@@ -602,7 +602,7 @@ nameAddress with length nameLength}
 
 \example{ $>$ 1 100 writeDAC }{Set DAC channel 1 to 100 counts}
 
-\cmd{writePassiveBaseDAC}{value}{}{write value to PMT passive base DAC}
+\cmd{writePassiveBaseDAC}{channel value}{}{write value to PMT passive base DAC}
 
 \cmd{xor}{a b}{result}{result = a xor b}
 \cmd{ymodem1k}{}{dataAddress dataLength}{

@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdio.h>
 
 #include "iceboot/sfi.h"
 #include "booter/epxa.h"
@@ -90,7 +89,6 @@ static const char *prtPLL(const char *p) {
    }
    else {
       printf("unknown plln, must be 1 or 2\r\n");
-      return p;
    }
 
    if (addr!=NULL) {
@@ -118,7 +116,6 @@ static const char *prtPLL(const char *p) {
 int osInit(int argc, char *argv[]) { 
    extern short *acqAddr;
    extern int acqLen;
-   extern void addCFuncBucket(const char *nm, CFunc cf);
 
     addConstantBucket("REGISTERS", REGISTERS);
 #if defined(CPLD_ADDR)
@@ -220,16 +217,6 @@ int fpga_config(int *p, int nbytes) {
     }
   }
 
-#if 0
-  /* load thresholds for comm -- these are defaults except sdelay
-   * and rdelay...
-   */
-  if (hal_FPGA_query_type()==DOM_HAL_FPGA_TYPE_STF_COM) {
-     *(unsigned *) 0x90081080 = (970<<16)|960; /* clev */
-     *(unsigned *) 0x90081084 = (1<<24)|(1<<16)|(3<<8)|64;
-  }
-#endif
-
   /* load domid here so that "hardware" domid
    * works... sample domid: 710200073c7214d0
    *
@@ -300,6 +287,9 @@ int fb_cpld_config(int *p, int nbytes) {
     /* Disable JTAG in PLD and FPGA  */
     hal_FPGA_TEST_FB_JTAG_disable();
     halDisableFlasherJTAG();
+    
+    /* Turn off flasherboard */
+    hal_FB_disable();
     
     return err;
 }

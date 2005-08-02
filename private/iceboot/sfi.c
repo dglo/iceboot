@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.125 $
- * $Author: jkelley $
- * $Date: 2005-07-01 14:09:04 $
+ * $Revision: 1.116.2.5 $
+ * $Author: arthur $
+ * $Date: 2005-08-02 16:25:33 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -101,11 +101,14 @@
 #include "sfi.h"
 #include "iceboot/memtests.h"
 #include "hal/DOM_MB_hal.h"
+#include "dom-fpga/fpga-versions.h"
 #include "iceboot/flash.h"
 #include "iceboot/fis.h"
 #include "osdep.h"
 #include "md5.h"
-#include "versions.h"
+
+#define STR(a) #a
+#define STRING(a) STR(a)
 
 /* location and length of the buffer
  * used for acquisition...
@@ -1016,7 +1019,7 @@ static const char *setLEDdelay(const char *p) {
 
 static const char *enableFB(const char *p) {
     int err, config_t, valid_t, reset_t;    
-    err = hal_FB_enable(&config_t, &valid_t, &reset_t, DOM_FPGA_TEST);
+    err = hal_FB_enable(&config_t, &valid_t, &reset_t);
     if (err != 0) {
         switch(err) {
         case FB_HAL_ERR_CONFIG_TIME:
@@ -2014,41 +2017,60 @@ static const char *pldVersions(const char *p) {
 }
 
 static const char *fpgaType(DOM_HAL_FPGA_TYPES type) {
-   if (type==DOM_HAL_FPGA_TYPE_STF_COM)         { return "stf"; }
-   else if (type==DOM_HAL_FPGA_TYPE_DOMAPP)     { return "domapp"; }
-   else if (type==DOM_HAL_FPGA_TYPE_CONFIGBOOT) { return "configboot"; }
-   else if (type==DOM_HAL_FPGA_TYPE_ICEBOOT)    { return "iceboot"; }
-   else if (type==DOM_HAL_FPGA_TYPE_STF_NOCOM)  { return "stf-no-comm"; }
+   if (type==DOM_HAL_FPGA_TYPE_STF_COM) { return "stf"; }
+   else if (type==DOM_HAL_FPGA_TYPE_DOMAPP) { return "domapp"; }
+   else if (type==DOM_HAL_FPGA_TYPE_CONFIG) { return "configboot"; }
+   else if (type==DOM_HAL_FPGA_TYPE_ICEBOOT) { return "iceboot"; }
+   else if (type==DOM_HAL_FPGA_TYPE_STF_NOCOM) { return "stf-no-comm"; }
    return "unknown";
 }
 
 static const char *fpgaVersions(const char *p) {
-   const int type = hal_FPGA_query_type();
-#define FPGA_QUERY(a) \
-  hal_FPGA_query_component_version(DOM_HAL_FPGA_COMP_##a), \
-  hal_FPGA_query_component_expected(DOM_HAL_FPGA_TYPE_STF_COM, \
-    DOM_HAL_FPGA_COMP_##a)
+#define EXPVER(a, b) (expected_versions[a][FPGA_VERSIONS_##b])
+   /* FIXME: put the correct address in here... */
+   unsigned *versions = (unsigned *) 0x90000000;
+   const int type = 
+      (versions[0] <= FPGA_VERSIONS_TYPE_STF_NOCOM) ? 
+      versions[0] : FPGA_VERSIONS_TYPE_ICEBOOT;
 
    /* print out the versioning info...
     */
-   printf("fpga type    %s\r\n", fpgaType(type));
+   printf("fpga type    %s\r\n", fpgaType(hal_FPGA_query_type()));
    printf("build number %d\r\n", hal_FPGA_query_build());
    printf("matches?     %s\r\n", 
-	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_STF_COM,
+	  hal_FPGA_query_versions(DOM_HAL_FPGA_TYPE_ICEBOOT,
 				  DOM_HAL_FPGA_COMP_ALL)?"no":"yes");
    printf("versions:\r\n");
-   printf("  com_fifo           %d [%d]\r\n", FPGA_QUERY(COM_FIFO));
-   printf("  com_dp             %d [%d]\r\n", FPGA_QUERY(COM_DP));
-   printf("  daq                %d [%d]\r\n", FPGA_QUERY(DAQ));
-   printf("  pulsers            %d [%d]\r\n", FPGA_QUERY(PULSERS));
-   printf("  discriminator_rate %d [%d]\r\n", FPGA_QUERY(DISCRIMINATOR_RATE));
-   printf("  local_coinc        %d [%d]\r\n", FPGA_QUERY(LOCAL_COINC));
-   printf("  flasher_board      %d [%d]\r\n", FPGA_QUERY(FLASHER_BOARD));
-   printf("  trigger            %d [%d]\r\n", FPGA_QUERY(TRIGGER));
-   printf("  local_clock        %d [%d]\r\n", FPGA_QUERY(LOCAL_CLOCK));
-   printf("  supernova          %d [%d]\r\n", FPGA_QUERY(SUPERNOVA));
+   printf("  com_fifo           %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_COM_FIFO], EXPVER(type, COM_FIFO));
+   
+   printf("  com_dp             %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_COM_DP], EXPVER(type, COM_DP));
 
-#undef FPGA_QUERY
+   printf("  daq                %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_DAQ], EXPVER(type, DAQ));
+
+   printf("  pulsers            %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_PULSERS], EXPVER(type, PULSERS));
+
+   printf("  discriminator_rate %d [%d]\r\n",
+	  versions[FPGA_VERSIONS_DISCRIMINATOR_RATE], 
+	  EXPVER(type, DISCRIMINATOR_RATE));
+
+   printf("  local_coinc        %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_LOCAL_COINC], EXPVER(type, LOCAL_COINC));
+
+   printf("  flasher_board      %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_FLASHER_BOARD], EXPVER(type, FLASHER_BOARD));
+
+   printf("  trigger            %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_TRIGGER], EXPVER(type, TRIGGER));
+
+   printf("  local_clock        %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_LOCAL_CLOCK], EXPVER(type, LOCAL_CLOCK));
+
+   printf("  supernova          %d [%d]\r\n", 
+	  versions[FPGA_VERSIONS_SUPERNOVA], EXPVER(type, SUPERNOVA));
 
    return p;
 }
@@ -2656,7 +2678,7 @@ int main(int argc, char *argv[]) {
      { "readTemp", readTemp },
      { "i", loopCount },
      { "readBaseDAC", readBaseDAC },
-     { "readBaseADC", readBaseADC },         
+     { "readBaseADC", readBaseADC },
      { "readPressure", readPressure },
      { "getFBfw", getFBfw },
      { "getFBhw", getFBhw },
@@ -2786,8 +2808,9 @@ int main(int argc, char *argv[]) {
   }
   else sourceStartup();
 
-  printf(" Iceboot (%s) build %s.....\r\n",  versions.tag, versions.build);
-
+  printf(" Iceboot (%s) build %s.....\r\n", STRING(PROJECT_TAG),
+	 STRING(ICESOFT_BUILD));
+  
   line = (char *) memalloc(linesz);
 
   if ((err=setjmp(jenv))!=0) {

@@ -32,10 +32,10 @@ static int nerrors = 0;
 
 int flashInstall(void) {
    void *fs, *fe;
-   int nretries=0;
-   int ck=0, cksum=0;
+   int nretries;
+   int ck, cksum=0;
    int allDone = 0;
-   int len=0;
+   int len;
    int nb = 0;
    int offset = 0;
    int ndata = 0;
