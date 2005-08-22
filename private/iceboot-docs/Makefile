@@ -16,9 +16,10 @@ iceboot-ug.pdf : iceboot-ug.ps
 	pdflatex iceboot-ug.tex
 
 install: iceboot-ug.pdf iceboot-ug.ps iceboot-ug.dvi
-	cp -v iceboot-ug.pdf iceboot-ug.ps iceboot-ug.dvi ~/public_html/dom
+	scp iceboot-ug.pdf glacier.lbl.gov:public_html/dom
 
 clean:
 	rm -f iceboot-ug.dvi iceboot-ug.ind iceboot-ug.log iceboot-ug.aux \
-		iceboot-ug.ilg
+		iceboot-ug.ilg iceboot-ug.idx iceboot-ug.out iceboot-ug.pdf \
+		iceboot-ug.ps iceboot-ug.toc
 
