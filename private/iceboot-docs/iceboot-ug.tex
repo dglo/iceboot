@@ -446,11 +446,13 @@ line feed character address and length to the stack}
 dom id string}
 \cmd{drop}{}{}{Drop the top stack element}
 \cmd{dup}{a}{a a}{Duplicate the top stack element}
-\cmd{enableFB}{}{configtime validtime status}{ Enable and power-up the
+\cmd{enableFB}{}{resettime configtime validtime status}{ Enable and power-up the
   flasherboard.  Returns status (0=success) or error code, along with
   diagnostic timing information.  configtime is the time required to
-  configure the CPLD, in us, and validtime is the time required for
-  the clock to stabilize during power-up (also in us). }
+  configure the CPLD, in us; validtime is the time required for
+  the clock to stabilize during power-up (in us); and resettime is the
+  total time required for the CPLD to reset, including the CPLD configuration and
+  clock stability periods (in us).}
 \cmd{enableHV}{}{}{Enable PMT high-voltage base}
 \cmd{enableLED}{}{}{Enable the onboard LED}
 \cmd{exec}{execAddress execLength}{}{Execute the program at execAddress with
