@@ -24,12 +24,7 @@
 \
 \ run stf server...
 \
-: stf s" stf.sbi" find if fpga endif s" stfserv" find if exec endif ;
-
-\
-\ run stf menu program...
-\
-: menu s" stf.sbi" find if fpga endif s" menu" find if exec endif ;
+: stf s" iceboot.sbi" find if fpga endif s" stfserv" find if exec endif ;
 
 \
 \ run domapp
