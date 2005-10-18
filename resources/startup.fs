@@ -29,9 +29,9 @@
 \
 \ run domapp
 \
-: testdomapp s" testdomapp" find if exec endif ;
+: testdomapp s" testdomapp.gz" find if gunzip exec endif ;
 : domapp-sbi s" domapp.sbi" find if fpga endif ;
-: domapp domapp-sbi s" domapp" find if exec endif ;
+: domapp domapp-sbi s" domapp.gz" find if gunzip exec endif ;
 : domapp-test domapp-sbi s" domapp-test" find if exec endif ;
 \
 \ run echomode
