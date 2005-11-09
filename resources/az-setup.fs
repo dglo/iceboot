@@ -16,24 +16,39 @@
 : atwdatr                $1 $90081000 !  
 : atwdbtr              $100 $90081000 !
 : atwdtr               $101 $90081000 !
+
 : atwdatrfe        $1000001 $90081000 !  
 : atwdbtrfe        $1000100 $90081000 !
 : atwdtrfe         $1000101 $90081000 !
+
 : atwdatrledon    $04000001 $90081000 !
 : atwdbtrledon    $04000100 $90081000 !
 : atwdtrledon     $04000101 $90081000 !
+
+: atwdatrspeled    $04000002 $90081000 !
+: atwdbtrspeled    $04000200 $90081000 !
+: atwdtrspeled     $04000202 $90081000 !
+
 : atwdaledtr      $04000008 $90081000 !
 : atwdbledtr      $04000800 $90081000 !
 : atwdledtr       $04000808 $90081000 !
+
 : atwdatrspefe     $1000002 $90081000 !
 : atwdbtrspefe     $1000200 $90081000 !
 : atwdtrspefe      $1000202 $90081000 !
+
 : atwdatrspe        $000002 $90081000 !
 : atwdbtrspe        $000200 $90081000 !
 : atwdtrspe         $000202 $90081000 !
+
+: atwdafadctrspe        $020002 $90081000 !
+: atwdbfadctrspe        $020200 $90081000 !
+: atwdfadctrspe         $020202 $90081000 !
+
 : atwdtrr2r       $40000101 $90081000 !
 : atwdatrr2r      $40000001 $90081000 !
 : atwdbtrr2r      $40000100 $90081000 !
+
 : atwdtrr2rch3    $10000101 $90081000 !
 : atwdatrr2rch3   $10000001 $90081000 !
 : atwdbtrr2rch3   $10000100 $90081000 !
@@ -50,24 +65,39 @@
 : atall  atwdrs atwdtr  wait1ms atwdard atwdbrd atwdrs
 : ataall atwdrs atwdatr wait1ms atwdard         atwdrs
 : atball atwdrs atwdbtr wait1ms atwdbrd atwdrs
+
 : atallfe   atwdrsfe atwdtrfe  wait1ms atwdard atwdbrd atwdrsfe
 : ataallfe  atwdrsfe atwdatrfe wait1ms atwdard         atwdrsfe 
 : atballfe  atwdrsfe atwdbtrfe wait1ms atwdbrd         atwdrsfe 
+
 : atallled   atwdrsled atwdledtr wait1ms atwdard atwdbrd atwdrsled
 : ataallled  atwdrsled atwdaledtr wait1ms atwdard         atwdrsled
 : atballled  atwdrsled atwdbledtr wait1ms         atwdbrd atwdrsled
+
+: atallspeled   atwdrsled atwdtrspeled  wait1ms atwdard atwdbrd atwdrsled
+: ataallspeled  atwdrsled atwdatrspeled wait1ms atwdard         atwdrsled
+: atballspeled  atwdrsled atwdbtrspeled wait1ms         atwdbrd atwdrsled
+
 : atallspefe  atwdrsfe atwdtrspefe  wait1ms atwdard atwdbrd atwdrsfe
 : ataallspefe atwdrsfe atwdatrspefe wait1ms atwdard         atwdrsfe
 : atballspefe atwdrsfe atwdbtrspefe wait1ms         atwdbrd atwdrsfe
+
 : atallspe  atwdrs atwdtrspe  wait1ms atwdard atwdbrd atwdrs
 : ataallspe atwdrs atwdatrspe wait1ms atwdard         atwdrs
 : atballspe atwdrs atwdbtrspe wait1ms         atwdbrd atwdrs
+
+: atallfadcspe  atwdrs atwdfadctrspe  wait1ms atwdard atwdbrd fadcrd atwdrs
+: ataallfadcspe atwdrs atwdafadctrspe wait1ms atwdard         fadcrd atwdrs
+: atballfadcspe atwdrs atwdbfadctrspe wait1ms         atwdbrd fadcrd atwdrs
+
 : atallr2r   atwdrs atwdtrr2r  wait1ms atwdard atwdbrd atwdrs
 : ataallr2r  atwdrs atwdatrr2r wait1ms atwdard         atwdrs
 : atballr2r  atwdrs atwdbtrr2r wait1ms         atwdbrd atwdrs
+
 : atallr2ron   atwdrsr2r atwdtrr2r  wait1ms atwdard atwdbrd atwdrsr2r
 : ataallr2ron  atwdrsr2r atwdatrr2r wait1ms atwdard         atwdrsr2r
 : atballr2ron  atwdrsr2r atwdbtrr2r wait1ms         atwdbrd atwdrsr2r
+
 : atallr2rch3on  atwdrsr2rch3 atwdtrr2rch3  wait1ms atwdard atwdbrd atwdrsr2rch3
 : ataallr2rch3on atwdrsr2rch3 atwdatrr2rch3  wait1ms atwdard         atwdrsr2rch3
 : atballr2rch3on atwdrsr2rch3 atwdbtrr2rch3  wait1ms         atwdbrd atwdrsr2rch3
@@ -99,11 +129,16 @@
 : pulseron900 pulseron900messg   11 900 writeDAC 0 $90081000 ! $1000000 $90081000 !
 : pulseroff   pulseroffmessg     11 0   writeDAC 0 $90081000 !
 
-: ledon1023messg s" ledon1023messg" type crlf type ; 
+: ledonmessg s" ledonmessg" type crlf type ; 
 : ledoffmessg s" ledoffmessg" type crlf type ;
 
-: ledon1023   ledon1023messg     12 1023 writeDAC 0 $90081000 ! $04000000 $90081000 !
-: ledoff      ledoffmessg        12 0 writeDAC    0 $90081000 !
+: enableLED  CPLD 9 + c@ 8 or      CPLD 9 + c!
+: disableLED CPLD 9 + c@ 8 not and CPLD 9 + c!
+: ledon  ledonmessg  enableLED  0 $90081000 ! $04000000 $90081000 !
+: ledoff ledoffmessg disableLED 0 $90081000 !
+: ledmax  12 0    writeDAC 
+: ledmin  12 1023 writeDAC
+
 
 : fadctrfe      $1010000 $90081000 !
 : fadctrspefe   $1020000 $90081000 !
@@ -111,15 +146,20 @@
 : fadctrspe       $20000 $90081000 !
 : fadctrr2r    $40010000 $90081000 !
 : fadctrr2rch3 $10010000 $90081000 !
+: fadctrspeled $04020000 $90081000 !
+
 : fadcrd $90083000 512 od
+
 : fadcrsfe $1000000 $90081000 !
 : fadcrs   0        $90081000 !
 : fadcrsr2r $10000000  $90081000 !
-: fadcall        fadcrs   fadctr      wait1ms fadcrd fadcrs
-: fadcallfe      fadcrsfe fadctrfe    wait1ms fadcrd fadcrsfe
-: fadcallfesync  fadcrs   fadctrfe    wait1ms fadcrd fadcrs
-: fadcallspefe   fadcrsfe fadctrspefe wait1ms fadcrd fadcrsfe
-: fadcallr2r     fadcrs   fadctrr2r   wait1ms fadcrd fadcrs
+
+: fadcall        fadcrs    fadctr       wait1ms fadcrd fadcrs
+: fadcallfe      fadcrsfe  fadctrfe     wait1ms fadcrd fadcrsfe
+: fadcallfesync  fadcrs    fadctrfe     wait1ms fadcrd fadcrs
+: fadcallspefe   fadcrsfe  fadctrspefe  wait1ms fadcrd fadcrsfe
+: fadcallr2r     fadcrs    fadctrr2r    wait1ms fadcrd fadcrs
+: fadcallspeled  fadcrsled fadctrspeled wait1ms fadcrd fadcrsled
 
 : comdactria  $0 $90081008 ! $1 $90081008 !
 : comadctr    $10 $90081008 !
@@ -139,21 +179,26 @@
 
 : fadcloop   10 0 ?DO fadcall   LOOP
 : fadcfeloop 10 0 ?DO fadcallfe LOOP
-: fadcspefeloop  9 520 writeDAC 10 0 ?DO fadcallspefe LOOP
+: fadcspefeloop   9 520 writeDAC 10 0 ?DO fadcallspefe LOOP
+: fadcspeledloop  9 520 writeDAC 10 0 ?DO fadcallspeled LOOP
 
 : atwdloopmessg s" atwdloopmessg" type crlf type ;
 : atwdloopshortmessg s" atwdloopshortmessg" type crlf type ;
 : atwdfeloopmessg s" atwdfeloopmessg" type crlf type ;
 : atwdledloopmessg s" atwdledloopmessg" type crlf type ;
+: atwdspeledloopmessg s" atwdspeledloopmessg" type crlf type ;
 : atwdspefeloopmessg s" atwdspefeloopmessg" type crlf type ;
 : atwdspeloopmessg s" atwdspeloopmessg" type crlf type ;
+: atwdfadcspeloopmessg s" atwdfadcspeloopmessg" type crlf type ;
 
-: atwdloop      atwdloopmessg                     100 0 ?DO ataall      atball      LOOP
-: atwdloopshort atwdloopshortmessg                10  0 ?DO ataall      atball      LOOP
-: atwdfeloop    atwdfeloopmessg                   100 0 ?DO ataallfe    atballfe    LOOP
-: atwdledloop   atwdledloopmessg                  100 0 ?DO ataallled   atballled   LOOP
-: atwdspefeloop atwdspefeloopmessg 9 520 writeDAC 100 0 ?DO ataallspefe atballspefe LOOP
-: atwdspeloop   atwdspeloopmessg   9 520 writeDAC 100 0 ?DO ataallspe   atballspe   LOOP
+: atwdloop        atwdloopmessg                       100 0 ?DO ataall        atball        LOOP
+: atwdloopshort   atwdloopshortmessg                  10  0 ?DO ataall        atball        LOOP
+: atwdfeloop      atwdfeloopmessg                     100 0 ?DO ataallfe      atballfe      LOOP
+: atwdledloop     atwdledloopmessg                    100 0 ?DO ataallled     atballled     LOOP
+: atwdspeledloop  atwdspeledloopmessg  9 520 writeDAC 100 0 ?DO ataallspeled  atballspeled  LOOP
+: atwdspefeloop   atwdspefeloopmessg   9 520 writeDAC 100 0 ?DO ataallspefe   atballspefe   LOOP
+: atwdspeloop     atwdspeloopmessg     9 520 writeDAC 100 0 ?DO ataallspe     atballspe     LOOP
+: atwdfadcspeloop atwdfadcspeloopmessg 9 520 writeDAC 100 0 ?DO ataallfadcspe atballfadcspe LOOP
 
 : pingpongmessg s" pingpongmessg"  type crlf type ;
 : pingpong pingpongmessg  9 520 writeDAC 0 $f acq-pp $01000000 208000 od
@@ -179,8 +224,8 @@
 : turnoffbase turnoffbasemessg $0 $50000009 c!
 : sethv     sethvmessg      3400 writeActiveBaseDAC
 : sethvto0     sethvto0messg      0 writeActiveBaseDAC
-: pmton   pmtonmessg turnonbase sethv
-: pmtoff pmtoffmessg sethvto0   turnoffbase
+: pmton   pmtonmessg turnonbase sethv 2000000 usleep readBaseADC .
+: pmtoff pmtoffmessg sethvto0  turnoffbase 2000000 usleep readBaseADC .
 
 : lcrs         $0         $90081018 !
 : lcactlatch   $0000f000  $90081018 !
@@ -214,8 +259,8 @@
 : lcresults 1100aa00 11009a00 11006a00 1100a900 1100a600 11009900 11009600 11006600 11006900
 
 
-0 850 writeDAC 1 2097 writeDAC 2 3000 writeDAC 3 2048 writeDAC
-4 850 writeDAC 5 2097 writeDAC 6 3000 writeDAC 7 1925 writeDAC
+0 850 writeDAC 1 2097 writeDAC 2 600 writeDAC 3 2048 writeDAC
+4 850 writeDAC 5 2097 writeDAC 6 600 writeDAC 7 1925 writeDAC
 10 700 writeDAC
 13 800 writeDAC
 14 1023 writeDAC

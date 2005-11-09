@@ -10,11 +10,44 @@
 #include <stdio.h>
 
 #include "iceboot/memtests.h"
+#include "iceboot/osdep.h"
 
 #define RAND32 0x16383245
 
 /* Data. */
 int silent_test = 0;
+
+static int verifyWords(ui32 *p1, ui32 *p2, int offset) {
+   int attempt = 0;
+   int gotOne = 0;
+   const ui32 v1 = *p1;
+   const ui32 v2 = *p2;
+   
+   if (v1 == v2) return OK;
+
+   printf("FAILURE [%d]: 0x%08x != 0x%08x at offset 0x%08x.\r\n",
+	  attempt, v1, v2, offset);
+
+   /* check to see if it is a read error...
+    */
+   for (attempt=1; attempt<20; attempt++) {
+      dcacheInvalidateAll();
+      if ( *(volatile ui32 *) p1 != *(volatile ui32 *) p2 ) {
+	 printf("FAILURE [%d]: 0x%08x != 0x%08x at offset 0x%08x\r\n"
+		"  addresses: %08x %08x.\r\n",
+		attempt, v1, v2, offset, (unsigned) p1, (unsigned) p2);
+      }
+      else gotOne = 1;
+   }
+
+   printf("    probably a %s error\r\n", (gotOne) ? "read" : "write");
+   printf("      [%08x %08x %08x %08x %08x %08x %08x]\r\n"
+          "      [%08x %08x %08x %08x %08x %08x %08x]\r\n",
+	p1[1], p1[2], p1[3], p1[4], p1[5], p1[6], 
+        p1[7], p1[8], p1[9], p1[10], p1[11], p1[12], p1[13], p1[14]);
+ 
+   return ERROR;
+}
 
 /* Function definitions. */
 int test_verify_success (ui32 *bp1, ui32 *bp2, ui32 count) {
@@ -310,12 +343,9 @@ int test_bitflip_comparison (ui32 *bp1, ui32 *bp2, ui32 count) {
 	  q = ~q;
 	  p1 = (volatile ui32 *) bp1;
 	  p2 = (volatile ui32 *) bp2;
-	  for (i = 0; i < count; i++) {
-	      *p1++ = *p2++ = (i % 2) == 0 ? q : ~q;
-	  }
-	  
-	  if (test_verify_success (bp1, bp2, count) == ERROR) {
-	    return (ERROR);
+	  for (i = 0; i < count; i++, p1++, p2++) {
+	      *p1 = *p2 = (i % 2) == 0 ? q : ~q;
+	      if (verifyWords((ui32 *) p1, (ui32 *) p2, i)) return ERROR;
 	  }
 	}
     }
@@ -339,14 +369,8 @@ int test_stuck_address (ui32 *bp1, ui32 *unused, ui32 count) {
       p1 = (volatile ui32 *) bp1;
       for (i = 0; i < count; i++, p1++)
 	{
-	  if (*p1 != (((j + i) % 2) == 0 ? (ui32) p1 : ~((ui32) p1)))
-	    {
-	      printf("FAILURE: offset: "
-		     " %d (rep %d). [%08x should be: %08x]\r\n", i, j,
-		     *p1,
-		     (((j + i) % 2) == 0 ? (ui32) p1 : ~((ui32) p1)));
-	      err = ERROR;
-	    }
+	   ui32 exp = ((j + i) % 2) == 0 ? (ui32) p1 : ~((ui32) p1);
+	   if (verifyWords((ui32 *)p1, &exp, i)) return ERROR;
 	}
     }
   return err;
@@ -365,12 +389,8 @@ int test_thorsten0f(ui32 *bp, ui32 *unused, ui32 count) {
    bp = save;
    for (i=0; i<count; i++, bp++) {
       const unsigned addr = (unsigned) bp;
-      const ui32 ev = (addr>>5)&1 ? 0xffffffff : 0;
-      if ( *bp != ev) {
-	 printf("FAILURE: offset %d: expected: %08x, got: %08x\r\n",
-		i, ev, *bp);
-	 err = ERROR;
-      }
+      ui32 ev = (addr>>5)&1 ? 0xffffffff : 0;
+      if (verifyWords(bp, &ev, i)) return ERROR;
    }
 
    return err;
@@ -390,11 +410,7 @@ int test_thorsten16(ui32 *bp, ui32 *unused, ui32 count) {
    for (i=0; i<count; i++, bp++) {
       const unsigned addr = (unsigned) bp;
       const ui32 ev = ((addr>>5)&1 ? 0xffffffff : 0)&0xffff;
-      if ( *bp != ev) {
-	 printf("FAILURE: offset %d: expected: %08x, got: %08x\r\n",
-		i, ev, *bp);
-	 err = ERROR;
-      }
+      if (verifyWords((ui32 *)bp, (ui32 *) &ev, i)) return ERROR;
    }
 
    return err;

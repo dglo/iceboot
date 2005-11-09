@@ -1,13 +1,90 @@
 \documentclass{article}
-\usepackage{graphicx}
 \usepackage{makeidx}
+\usepackage{amssymb}
+\usepackage{url}
+\usepackage[T1]{fontenc}
+\usepackage[pdftex]{graphicx}
+\usepackage[]{hyperref}
+\usepackage{ae}
 
 \makeindex
 
+\newcommand{\example}[2]{ 
+        \subsubsection*{Examples} {\tt #1} \medskip \\ 
+        #2
+}
+
+\newcommand{\nextexample}[2]{
+        \flushleft {\tt #1} \medskip \\ 
+        #2
+}
+
 \newcommand{\cmd}[4]{
-	\subsection{#1} \index{Commands!#1}
-	\emph{#2} #1 \emph{#3} \\
-	#4
+        \subsection{#1} \index{Commands!#1}
+        \subsubsection*{Description}
+        \emph{#2} #1 \emph{#3} \medskip \\
+        #4
+}
+
+\newcommand{\cmdni}[4]{
+        \subsection{#1}
+        \subsubsection*{Description}
+        \emph{#2} #1 \emph{#3} \medskip \\
+        #4
+}
+
+\newcommand{\samplecmd}[4]{
+        \subsubsection*{Description}
+        \emph{#2} #1 \emph{#3} \medskip \\
+        #4
+}
+
+\newcommand{\dacChannelDescriptions}{
+\index{DAC!channel descriptions}
+\begin{tabular}{cl}
+Channel & Description \\
+0 & ATWD0 Trigger Bias Current \\
+1 & ATWD0 Ramp Top Voltage\\
+2 & ATWD0 Ramp Rate Control Current \\
+3 & ATWD Analog Reference Voltage \\
+4 & ATWD1 Trigger Bias Current \\
+5 & ATWD1 Ramp Top Voltage \\
+6 & ATWD1 Ramp Rate Control Current \\
+7 & PMT Front End Pedestal \\
+8 & Multiple SPE Discriminator Threshold \\
+9 & Single SPE Discriminator Threshold \\
+10 & Fast ADC Reference (Pedestal Shift) \\
+11 & Internal Pulser Amplitude \\
+12 & On-Board LED Brightness Control \\
+13 & Front End Amp Lower Clamp Voltage \\
+14 & Flasherboard Timing Pulse Offset \\
+15 & DC Offset of the ATWD Mux Input \\
+\end{tabular}
+\medskip \\
+The DAC channels are described in more detail at 
+\url{http://rust.lbl.gov/~gtp/DOM/API/DOM_CPLD_API_v1.0.html}
+}
+
+\newcommand{\adcChannelDescriptions}{
+\index{ADC!channel descriptions}
+\begin{tabular}{cl}
+Channel & Description \\
+0 & -5V monitor \\
+1 & Pressure \\
+2 & 5V Power Supply Voltage \\
+3 & 5Vanalog Current Monitor \\
+4 & 3.3V input Current Monitor  \\
+5 & 2.5V input Current Monitor \\
+6 & 1.8 V input Current Monitor \\
+7 & -5V Current Monitor \\
+8 & DISC-OneSPE \\
+9 & 1.8V monitor \\
+10 & 2.5V monitor \\
+11 & 3.3V monitor \\
+\end{tabular}
+\medskip \\
+The ADC channels are described in more detail at 
+\url{http://rust.lbl.gov/~gtp/DOM/API/DOM_CPLD_API_v1.0.html}
 }
 
 \begin{document}
@@ -19,11 +96,11 @@
 
 \eject
 
-The work described here was created with help
-of many people -- I'd like to point out just a few.
+The work described here was created with the help
+of many people -- I'd like to point out just a few \ldots
 
-Thanks to Azriel Goldschmidt, who put up with the
-buggy software and offered many helpful suggestions
+Thanks to Azriel Goldschmidt, who patiently puts up with the
+buggy software and has offered many helpful suggestions
 and comments.
 
 Thanks to Simon Patton, who put together the build environment
@@ -39,10 +116,10 @@ completely defined what the software should
 do -- definitely the hardest part of getting the
 software to work.
 
-Thanks to Gerald Przybylsky
+Special thanks to Gerald Przybylski
 for sharing his workspace the last few months
 and putting up with -- even answering -- so 
-many na\" \i ve hardware questions.
+many of my na\" \i ve hardware questions.
 
 \thispagestyle{empty}
 
@@ -55,12 +132,44 @@ many na\" \i ve hardware questions.
 \section{Introduction}
 
 This document describes
-the DOM mainboard software environment to
-users and programmers.
+the DOM mainboard bootloader software environment 
+for Iceboot users and programmers.  While
+this document does not go into the details of the
+software design, it does cover the software at
+a high level, and should be a good place to get
+started working with Iceboot.
+
+Iceboot -- like most bootloaders -- is a program 
+for bringing up hardware from power off into a 
+known and consistent state.  The program must be
+able to execute programs (usually operating systems)
+and, at least at a simple level, must be able to
+read from filesystems.
+
+As we worked with the DOM hardware we found
+that we would like a few additional features from our
+bootloader:
+
+\begin{itemize}
+\item Complete diagnostics, things don't always work
+perfectly the first time.  It's nice to be able to
+see at a glance exactly where things are failing.
+\item Configurability, we want to be able to quickly
+choose configurable hardware parameters (CPU clock speed,
+SDRAM clock speed, etc\ldots).
+\item Expressiblity, we want to be able to do a lot without
+having to resort to the time-consuming cycle
+of C program development.
+\end{itemize}
+
+We chose forth for our boot environment as it is small, 
+interpreted and yet capable enough for the task at hand.
+Of course, we weren't the first to choose forth for out
+boot environment, see e.g. \url{www.openfirmware.org}
 
 \section{Booting the Hardware}
 
-After power on reset, the epxa ARM processor
+After power on reset, the Altera Excalibur ARM processor
 begins the boot process.  If the Boot from
 Flash \index{Boot from Flash} pin is active,
 the Excalibur starts execution from the start
@@ -68,8 +177,8 @@ of the EBI0 address space -- hardwired to be
 at address 0x40000000.  If the Boot from Flash
 pin is inactive, the CPU will take boot code
 and an fpga design file from a local programmable
-ROM device.  This document describes the boot
-from flash mode, the boot from serial mode (ConfigBoot) will
+ROM device.  This document describes the Boot
+from Flash mode, the boot from serial mode (ConfigBoot) will
 be described elsewhere.
 The CPU must initialize
 many pieces of hardware, so that the software
@@ -79,19 +188,20 @@ is found in section \ref{configfile}
 on page \pageref{configfile}.  The following
 sections will step through the boot process.
 
-	\subsection{Initialize Hardware}
+        \subsection{Hardware Initialization}
 
-First in line to be programmed are the EPXA PLLS.
-There are two of them:  PLL1 \index{EPXA!PLL1} and PLL2\index{EPXA!PLL2},
-PLL1 drives the AHB1 \index{EPXA!AHB1} after a divide by two (AHB1 is
-one half the frequency of PLL1) and PLL2 drives the AHB2\index{EPXA!AHB2} 
+First in line to be programmed are the Excalibur PLLs.
+There are two of them:  PLL1 \index{Excalibur!PLL1} and 
+PLL2\index{Excalibur!PLL2},
+PLL1 drives the AHB1 \index{Excalibur!AHB1} after a divide by two (AHB1 is
+one half the frequency of PLL1) and PLL2 drives the AHB2\index{Excalibur!AHB2} 
 clock after
 a divide by two.  The AHB1 clock is the main CPU clock and the
 AHB2 clock is used for the SDRAM clock.
 
 After the PLLs are setup, the iocontrol registers are
 configured, this lets us configure slew rates and other
-parameters for output pins on the epxa.
+parameters for output pins on the Excalibur.
 
 Next in line is initializing the UART\index{UART}.  Here we setup
 the Excalibur chip to do serial communications.  The
@@ -123,14 +233,15 @@ the boot code to the start of SDRAM, it is verified
 against the flash memory.  If the verify fails, the
 booter will print out the expected value (flash value), 
 the actual value read from SDRAM and the address of
-the error.
+the error.  These messages will continue in this format
+until all of the loaded image in SDRAM is checked.
 
 The final step in the low-level boot code is to
 jump to the code that contains the boot prompt,
 Iceboot.
 
 \section{Iceboot Command Line Interface}
-	\subsection{Overview}
+        \subsection{Overview}
 
 Once the hardware is initialized, we want to run
 the command line boot environment, this will allow us 
@@ -148,75 +259,278 @@ previous character on a line.  On most any terminal
 the Control-F and Control-B key sequences allow 
 the user to go forward and backward one word.
 Iceboot implements an extremely limited subset
-of the Forth programming language.  Forth is a
-stack oriented language which has been said to
-optimize interpreter development time.  The following
-sections describe the forth words that are implemented
-by Iceboot.
+of the Forth programming language.
 
-	\subsection{Commands}	
+\subsubsection{Flash Filesystem}
 
-List of commands \ldots
+The DOM board has a very simple flash
+filesystem for persistant data storage.
+There is only one directory, and each
+file takes up contiguous blocks on the
+flash.  The \emph{ls} command lists the contents
+of the flash filesystem, the \emph{find} command
+searches the directory, the \emph{create} command
+creates a new file on the filesystem, the \emph{lock}
+command locks a file on the filesystem and the
+\emph{unlock} command unlocks a file on the filesystem.
+Files are locked by default and \emph{create} is
+the only command which automatically unlocks files
+before creating them.  The first two files on
+the flash filesystem are reserved, they can be
+overwritten using the \emph{create} command but they
+may not be removed.
 
-\cmd{!, w!, c!}{value address}{}{Put value into address, 32bit, 16bit or
+\subsubsection{Forth}
+
+Forth is a stack oriented language, most commands
+work on data on the stack and return their results
+to the stack.  This makes entering commands a bit
+funny at times, but it makes the parser very easy
+to write, and therefore very small, fast and reliable.
+Here are a
+few references to forth material on the web:
+
+\begin{itemize}
+
+\item General forth info at \url{http://www.forth.org/}
+\item gforth at \url{http://www.jwdt.com/~paysan/html/gforth.html}
+\item Book at \url{http://www.forth.com/Content/Handbook/Handbook.html}
+
+\end{itemize}
+
+All commands are read one line at a time
+and so many commands \emph{must} be on one line to be
+syntactically correct.
+The commands are described using the following
+syntax:
+
+\samplecmd{sample}{arg1 arg2}{ret1 ret2}{Sample Command}
+
+The command word is sample, arg1 and arg2 must be
+put on the stack before sample is called and ret1 and
+ret2 are returned on the stack.  so, e.g.:
+
+\example{ $>$ 1 2 sample .s \\ <2> 3 4 }{arg1 is 1 arg2 is
+2 the command is sample and it returns ret1 which is 3
+and ret2 which is 4 (the .s command proings the contents
+of the stack).}
+
+The rest of this section contains descriptions of the
+real forth words that are implemented by iceboot:
+
+\cmdni{!, w!, c!}{value address}{}{Put value into address, 32bit, 16bit or
   8bit move.}
+\example{ $>$ \$1 \$50000009 c!}{Enable to high voltage base by writing
+1 hex (8 bits) into address \$50000009.}
+\nextexample{ $>$ \&10 base !}{Set number base back to decimal.}
+
 \cmd{*}{a b}{result}{a * b}
+\example{ $>$ 2 4 * . \\ 8 }{Multiple 2 and 4 to get 8.}
+
 \cmd{+}{a b}{result}{a + b}
+\example{ $>$ 2 4 + . \\ 6 }{Add 2 and 4 to get 6.}
+
 \cmd{-}{a b}{result}{a - b}
+\example{ $>$ 4 2 - . \\ 2 }{Subtract 2 from 4 to get 2.}
+
 \cmd{.}{}{}{Print top of stack}
+\example{ $>$ 1 . \\ 1 }{Print a 1, the contents of the top of the stack}
+
 \cmd{.s}{}{}{Print entire stack}
+\example{ $>$ 1 2 3 .s \\ <3> 1 2 3 }{ Print 1, 2, 3 the contents
+of the entire stack}
+
 \cmd{/}{a b}{result}{a / b}
-\cmd{:}{}{}{Start function definition.}
-\cmd{ < ) }{a b}{result}{a < b}
+\example{ $>$ 6 2 / . \\ 3 }{Divide 6 by 2 to get 3}
+
+\cmd{: name words ;}{}{}{Function definition.  The function
+is stored with the name name and words will be executed in
+place of the name}
+\example{ $>$ : hi s" hi there" type crlf type ; \\ $>$ hi \\ hi there}{
+Print "hi there" and carraige return line feed to stdout}
+
+\cmd{ < }{a b}{result}{a < b}
 \cmd{=}{a b}{result}{a = b}
 \cmd{ > }{a b}{result}{a > b}
-\cmd{?DO}{end start}{}{Execute code from end (exclusive) to start (inclusive)}
-\cmd{@, w@, c@}{address}{value}{Get a 32bit word, 16bit word or 8 bit word
-  from \emph{address}}
-\cmd{$\backslash$$\backslash$}{}{}{Comment character, all characters
+\cmd{?DO words LOOP}{end start}{}{Execute code from end (exclusive) to 
+start (inclusive).  Words are executed end - start times and the
+variable \emph{i} is set to the current loop count.}
+\example{ $>$ 5 0 ?DO i LOOP .s \\ <5> 0 1 2 3 4}{
+        Put the numbers 0-4 on the stack.
+}
+
+\cmdni{ $@$, w$@$, c$@$}{address}{value}{Get a 32bit word, 
+16bit word or 8 bit word from address}
+
+\cmdni{$\backslash$$\backslash$}{}{}{Comment character, all characters
 to end of line are ignored by interpreter}
+
 \cmd{allocate}{nbytes}{address}{Allocate nbytes on the heap address is put
   on the stack.}
-\cmd{analogMuxInput}{channel}{}{Select analog mux input channel}
+\example{ $>$ 4 allocate constant p \\ $>$ 1 p ! }{Allocate 4 bytes
+on the heap, set the address to the constant p and 
+put a 1 in that address}
+\cmd{analogMuxInput}{channel}{}{Select analog mux input channel. \\
+\medskip
+\begin{tabular}{ll}
+Channel & Signal \\
+0 & Toyocom \index{Toyocom} \\
+1 & 40MHz square wave \\
+2 & PMT LED current \\
+3 & Flasher board LED current \\
+4 & Upper Local Coincidence \\
+5 & Lower Local Coincidence \\
+6 & Communications ADC \\
+7 & Front End Pulser \\
+\end{tabular}
+\medskip \\
+The input mux channels are described in more detail at 
+\url{http://rust.lbl.gov/~gtp/DOM/API/DOM_CPLD_API_v1.0.html}}
+
+\cmd{acq-disc}{nseq readout-mask}{}{Variant of the acq-forced
+command (see below) that triggers on the SPE discriminator.}
+\cmd{acq-forced}{nseq readout-mask}{}{Start a batch of
+\textit{nseq} sequenced ATWD/FADC CPU-forced acqusitions.  
+The \textit{mode} parameter is a bitmask that specifies
+which channels are readout as follows
+\medskip \\
+\begin{tabular}{||l|l||}
+\hline
+Channel & Bitmask Bit   \\ \hline \hline
+ATWD-A Channel 0 & 0x01 \\ \hline
+ATWD-A Channel 1 & 0x02 \\ \hline
+ATWD-A Channel 2 & 0x04 \\ \hline
+ATWD-A Channel 3 & 0x08 \\ \hline
+ATWD-B Channel 0 & 0x10 \\ \hline
+ATWD-B Channel 1 & 0x20 \\ \hline
+ATWD-B Channel 2 & 0x40 \\ \hline
+ATWD-B Channel 3 & 0x80 \\ \hline
+FADC & 0x100 \\
+\hline
+\end{tabular} \\
+\medskip
+This command writes the samples to 'acquisition memory'
+mapped at \$1000000.  It must be dumped using \textit{od}
+or other command.}
+\cmd{acq-led}{nseq readout-mask}{}{Variant of the acq-forced
+command (see above) that triggers on the onboard LED.  Note that
+you must first enable the LED with the \textit{enableLED} command.}
+\cmd{acq-pp}{nseq readout-mask}{}{Variant of acq-disc
+that enables ATWD 'ping-pong' mode.  Note that you cannot
+readout the FADC with this command, yet.}
 \cmd{and}{a b}{result}{a and b}
 \cmd{base}{}{address}{Address of number base (10=decimal, 16=hex, ...)}
-\cmd{boardID}{}{address length}{get address and length of boardID string}
-\cmd{compress}{srcAddress srcLength}{destAddress destLength}{
- Compress the data at srcAddress with length srcLength and return
- the destAddress and destLength of the compressed data
-}
 \cmd{constant}{a}{name}{Set name to constant value a}
-\cmd{create}{nameAddress nameLength dataAddress dataLength}{}{
-	Create a file on the flash filesystem with name at
+\cmd{cp}{address length}{cpAddress cpLength}{Copy a memory block to sdram -- 
+usually used to copy from flash to sdram.}
+\example{ $>$ s\" test.sbi\" find if cp s\" test2.sbi\" create endif }{Copy
+the file in flash to memory, then create a new file on
+the flash filesystem with the same contents but a
+different name.}
+
+\cmd{create}{dataAddress dataLength nameAddress nameLength}{}{
+        Create a file on the flash filesystem with name at
 address nameAddress of length nameLength using data at dataAddress
 with length dataLength.
 }
-\cmd{crlf}{}{}{Print carraige return line feed characters}
-\cmd{disableCurrents}{}{result}{address of flag to set to disable printing of currents on the top of the screen}
+
+\cmd{crlf}{}{stringAddress stringLength}{Push the carraige return 
+line feed character address and length to the stack}
+\cmd{disableCurrents}{}{result}{address of flag to set to disable printing
+  of currents on the top of the screen}
+\cmd{disableFB}{}{}{Power-down and disable the flasherboard}
+\cmd{disableHV}{}{}{Disable PMT high-voltage base}
+\cmd{disableLED}{}{}{Disable the onboard LED}
+\cmd{domid}{}{address length}{get address and length of boardID string}
+\example{ $>$ crlf domid type type \\ 7383382234da2}{Print the
+dom id string}
 \cmd{drop}{}{}{Drop the top stack element}
 \cmd{dup}{a}{a a}{Duplicate the top stack element}
+\cmd{enableFB}{}{resettime configtime validtime status}{ Enable and power-up the
+  flasherboard.  Returns status (0=success) or error code, along with
+  diagnostic timing information.  configtime is the time required to
+  configure the CPLD, in us; validtime is the time required for
+  the clock to stabilize during power-up (in us); and resettime is the
+  total time required for the CPLD to reset, including the CPLD configuration and
+  clock stability periods (in us).}
+\cmd{enableHV}{}{}{Enable PMT high-voltage base}
+\cmd{enableLED}{}{}{Enable the onboard LED}
 \cmd{exec}{execAddress execLength}{}{Execute the program at execAddress with
 length execLength}
+\example{ $>$ s" stf" find if exec endif}{
+  If the file named stf is found on the flash filesystem,
+exec it (run it).
+}
+
 \cmd{false}{}{false}{return false (0)}
+
+\cmd{fb-cpld}{xsvfAddress xsvfLength}{status}{Program the flasher board
+CPLD with the XSVF file at xsvfAddress with length xsvfLength, return 
+status = 0 if all is ok, otherwise return error code.}
+\example{ $>$ s" flasher.xsvf" find if fb-cpld endif}{Program the
+flasher board CPLD with the XSVF file named flasher.xsvf in the flash 
+filesystem}
+
+\cmd{fbid}{}{address length}{Get address and length of flasherboard ID string}
+\example{ $>$ crlf fbid type type \\ ed00000a3daa5a01}{Print the
+flasherboard ID string}
+
 \cmd{find}{nameAddress nameLength}{fileAddress fileLength status}{
-	find the file with name at nameAddress of length nameLength
+        find the file with name at nameAddress of length nameLength
 and return it's address and length to the stack if status=1, if status=0
 then do nothing.
 }
+\example{ $>$ s" stf" find if exec endif } {Execute the file
+stf on the flash filesystem}
+\example{ $>$ s" startup.fs" find if interpret endif } {Interpret the contents
+of the file startup.fs on the flash filesystem}
+
 \cmd{fpga}{sbiAddress sbiLength}{status}{Program the fpga with the
 sbi file at sbiAddress with length sbiLength, return status = 0 if
 all is ok, otherwise return error code.}
+\example{ $>$ s" stf.sbi" find if fpga endif}{Program the
+fpga with the sbi file named stf.sbi in the flash filesystem}
+
 \cmd{free}{address}{}{Free allocated data at address.}
+
+\cmd{getFBdcdc}{enabled}{}{ Get the enabled/disabled status of the DC/DC
+  converter on the flasherboard which drives the LEDs }
+\cmd{getFBfw}{version}{}{ Get the firmware version of the flasherboard CPLD
+  }
+\cmd{getFBhw}{version}{}{ Get the hardware (PCB artwork) version of the 
+  flasherboard }
+
 \cmd{gunzip}{dataAddress dataLength}{destAddress destLength}{
-	gunzip a gzip file at dataAddress of length dataLength and
-put the resulting data in destAddress with length destLength.
+        Unzip a gzip file at dataAddress of length dataLength and
+put the resulting data in destAddress with length destLength.  if
+destLength=0 and destAddress=0 there was an error.
 }
+
+\cmd{hvid}{}{address length}{Get address and length of HV base ID string}
+\example{ $>$ crlf hvid type type \\ 00000a4478e8}{Print the
+HV base ID string}
+
 \cmd{i}{}{value of counter}{returns value of index variable in a ?DO loop.}
-\cmd{iceboot}{}{cmds\ldots}{run iceboot cmds\ldots}
+\example{ $>$ 4 0 ?DO i LOOP .s \\ <4> 0 1 2 3 } { Put the numbers 0-3 on
+the stack.}
+
 \cmd{if cmds endif}{cond}{}{execute commands if cond is non-zero}
-\cmd{init}{}{}{initialize flash filesystem}
+\example{ $>$ 3 readADC 1000 $>$ if s" high current on +5V" type 
+crlf type endif }{
+        Read the +5V current and print a warning if it is too high.
+}
+
+\cmd{init}{}{}{initialize flash filesystem, all data on
+flash will be \emph{erased}}
+\cmd{install}{}{}{install a new flash filesystem over the wire, all data on
+flash will be \emph{erased} -- and replaced with the data in the
+intel hex format file which is sent over the wire.}
+
 \cmd{interpret}{srcAddress srcLength}{}{Interpret data at
 address srcAddress with length srcLength}
+\example{ $>$ s" hi there type crlf type" interpret \\ hi there }{
+Interpret the string given.}
+
 \cmd{lock}{nameAddress nameLength}{}{lock flash file with name at nameAddress
 with length nameLength }
 \cmd{ls}{}{}{print listing of flash filesystem directory}
@@ -229,15 +543,50 @@ with length nameLength }
 \cmd{prtTemp}{code}{}{decode temperature and print it}
 \cmd{rawCurrents}{}{address}{return address of a flag to determine
 whether or not to print raw or cooked currents to the top of the screen.}
-\cmd{readADC}{channel}{value}{read ADC at channel }
-\cmd{readDAC}{channel}{value}{read DAC at channel }
+\cmd{readADC}{channel}{value}{read ADC at channel.
+\medskip \\
+\adcChannelDescriptions }
+
+\cmd{rcv}{}{messageType messageAddress messageLength}{receive a message
+from the DOR card.}
+\cmd{send}{messageType messageAddress messageLength}{send a message to
+the DOR card.}
+
+\cmd{readDAC}{channel}{value}{read DAC at channel.
+\medskip \\
+\dacChannelDescriptions
+}
+\cmd{readPressure}{}{pressure}{ Reads the DOM pressure and returns the
+  value in KPa.}
 \cmd{readTemp}{}{code}{return coded temperature value}
 \cmd{reboot}{}{}{reboot the DOM}
 \cmd{rm}{nameAddress nameLength}{}{remove the file with name at nameAddress
 and length of nameLength}
+\example{ $>$ s" unused.data" find if rm endif }{ Remove a file
+called unused.data on the flash filesystem}
+
 \cmd{rshift}{value shift}{result}{ result = value right shifted shift}
 \cmd{s`` words''}{}{wordsAddress wordsLength}{return string at wordsAddress
 with length wordsLength}
+
+\cmd{setFBbrightness}{level}{}{ Set the flasherboard brightness level}
+\cmd{setFBenables}{enable mask}{} { Set the mask which enables the
+  individual flasherboard LEDs }
+\cmd{setFBmux}{channel}{}{ Select which LED current is muxed back to the
+  mainboard.  An argument of 0 disables the mux, while 13 selects the TTL
+  driver pulse. }
+\cmd{setFBrate}{rate}{}{ Set the rate (in Hz) for the flasherboard pulses.
+ Rates supported are 610, 305, 153, 76, 38, 19, 10, 5, 2, and 1 Hz. }
+\cmd{setFBwidth}{width}{}{ Set the flasherboard pulse width }
+\cmd{setFBdcdc}{}{enable}{ Enable/disable the DC/DC converter on the
+  flasherboard which drives the LEDs }
+
+\cmd{setLEDdelay}{delay}{}{ Set the launch delay from the onboard LED to
+  the ATWD trigger.  Delay time is (2+\textit{delay})*25ns.}
+
+\cmd{startFBflashing}{}{}{ Start flashing the flasherboard }
+\cmd{stopFBflashing}{}{}{ Stop flashing the flasherboard }
+
 \cmd{swap}{}{}{ swap the two top words of the stack}
 \cmd{true}{}{result}{return a true result (-1)}
 \cmd{type}{stringAddress stringLength}{}{print string at stringAddress
@@ -245,35 +594,49 @@ with length stringLength}
 \cmd{unlock}{nameAddress nameLength}{}{unlock flash data with file name at
 nameAddress with length nameLength}
 \cmd{usleep}{us}{}{sleep for us microseconds}
-\cmd{writeDAC}{channel value}{}{write value to DAC channel}
+
+\cmd{writeActiveBaseDAC}{value}{}{write value to PMT active base DAC}
+
+\cmd{writeDAC}{channel value}{}{write value to DAC channel.
+\medskip \\
+\dacChannelDescriptions
+}
+
+\example{ $>$ 1 100 writeDAC }{Set DAC channel 1 to 100 counts}
+
+\cmd{writePassiveBaseDAC}{value}{}{write value to PMT passive base DAC}
+
 \cmd{xor}{a b}{result}{result = a xor b}
 \cmd{ymodem1k}{}{dataAddress dataLength}{
-	Download a file over the terminal return the address
+        Download a file over the terminal return the address
 and length of the data returned.
 }
 
 \section{Coding and Building the software}
-	\subsection{Overview}
-	
+        \subsection{Overview}
+        
 Iceboot is a combination of a few different projects
-that are checked into the icecube CVS repository.  The
+that are checked into the icecube CVS repository.  These
+project are all written in C.  The
+BFD build system (documented elsewhere) is used to build
+each of these projects.  The
 following sections describe the different projects.
 
-	\subsection{hal}
+        \subsection{hal}
 
-The hal project defines and implements the hardware access layer.  
+\index{hal} The hal project defines and implements the hardware access layer.  
 It is used to 
 abstract hardware access to facilitate simulation
-without real hardware.
+without real hardware.  Hal is documented at \url{http://deimos.lbl.gov/~arthur/dom-mb}
 
-	\subsection{dom-loader}
+        \subsection{dom-loader}
 
-The dom-loader project contains the hardware configuration file that 
+\index{dom-loader} The dom-loader project contains the hardware configuration file that 
 is used to configure the hardware on bootup.  This allows us to 
                          use epxa1 and epxa4 chips and
                           deal with different setting of the
                           dom-mainboard and the epxa eval boards
-			\label{configfile}.  The config file is
+                        \label{configfile}.  The config file is
 parsed to generate the low-level assembler code that configures
 the hardware.
 
@@ -281,15 +644,15 @@ This project also builds the boot image and contains the
 low-level code necessary to get read/write access to stdin
 and stdout over the serial port, or, eventually, the communications
 channel.
-			
-	\subsection{iceboot}
+                        
+        \subsection{iceboot}
 
-The    Iceboot project contains the C source for
+The Iceboot project contains the C source for
 the forth interpreter.
 
-	\subsection{stf}
+        \subsection{stf}
 
-Once hardware is working, a pass/fail high-level test
+\index{stf} Once hardware is working, a pass/fail high-level test
 is often required.  The stf project provides the infrastructure
 for creating, running, reporting and archiving this test
 information.
@@ -297,11 +660,3 @@ information.
 \printindex
 
 \end{document}
-
-
-
-
-
-
-
-

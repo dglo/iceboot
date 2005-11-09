@@ -9,7 +9,6 @@
 #include "iceboot/fis.h"
 #include "iceboot/flash.h"
 
-#define tmalloc(t) ((t *) malloc(sizeof(t)))
 #define smalloc(s) ((struct s *) malloc(sizeof(struct s)))
 
 static int fisBlockSize(void) {
@@ -75,7 +74,6 @@ static int updateDirectory(const struct fis_image_desc *img,
    struct fis_image_desc *t = (struct fis_image_desc *) malloc(block_size);
    int err = 0;
    int stat;
-   void *err_addr;
 
    if (t==NULL) {
       printf("unable to malloc block_size %d!\r\n", block_size);
@@ -96,7 +94,7 @@ static int updateDirectory(const struct fis_image_desc *img,
    flash_unlock(fis_addr, block_size);
 
    if ((stat = flash_erase(fis_addr, block_size))) {
-      printf("Error erasing at %p: %s\r\n", err_addr, flash_errmsg(stat));
+      printf("Error erasing at %p: %s\r\n", fis_addr, flash_errmsg(stat));
       err = 1;
    }
    else {
@@ -104,7 +102,7 @@ static int updateDirectory(const struct fis_image_desc *img,
        */
       if ((stat = flash_write(fis_addr, t, block_size))) {
 	 printf("Error programming at %p: %s\r\n", 
-		err_addr, flash_errmsg(stat));
+		fis_addr, flash_errmsg(stat));
 	 err = 1;
       }
    }
@@ -168,7 +166,6 @@ int fisDelete(const char *name) {
 
 int fisUnlock(const char *name) {
    const struct fis_image_desc *img = fisLookup(name);
-   void *err_addr;
    int stat;
    
    if (img==NULL) {
@@ -177,7 +174,8 @@ int fisUnlock(const char *name) {
    }
 
    if ((stat=flash_unlock((void *)img->flash_base, img->size))) {
-      printf("Error unlocking at %p: %s\r\n", err_addr, flash_errmsg(stat));
+      printf("Error unlocking at %p: %s\r\n", 
+             (void *) img->flash_base, flash_errmsg(stat));
       return 1;
    } 
 
@@ -186,7 +184,6 @@ int fisUnlock(const char *name) {
 
 int fisLock(const char *name) {
    const struct fis_image_desc *img = fisLookup(name);
-   void *err_addr;
    int stat;
 
    if (img==NULL) {
@@ -195,7 +192,8 @@ int fisLock(const char *name) {
    }
 
    if ((stat=flash_lock((void *)img->flash_base, img->size))) {
-      printf("Error locking at %p: %s\r\n", err_addr, flash_errmsg(stat));
+      printf("Error locking at %p: %s\r\n", 
+             (void *) img->flash_base, flash_errmsg(stat));
       return 1;
    } 
 
@@ -267,17 +265,27 @@ static int numReservedBlocks(void) { return 7; }
  *      into it, from the top down or the
  *      bottom up.  files too big to fit anywhere
  *      in the top, we just lv alone...
+ *
+ *   3) files may _not_ span more than one chip.
  */
 int fisCreate(const char *name, void *addr, int len) {
    const struct fis_image_desc *img = fisLookup(name);
    int i;
    int old_size = 0;
-   void *old_base;
+   void *old_base = NULL;
    const int block_size = fisDirSize();
    const int nblocks = (len + block_size - 1) / block_size;
    const int ndirs = block_size/sizeof(*img);
    int bloc = -1;
    struct fis_image_desc *nimg;
+
+   /* can't be bigger than 4MB (one chip)...
+    */
+   if (len<=0 || len>=4*1024*1024 - block_size) {
+      printf("fis create: invalid file size (%d), must be >0 and <4M\r\n",
+	     len);
+      return 1;
+   }
 
    if (img==NULL) {
       /* find an empty slot...
@@ -296,7 +304,7 @@ int fisCreate(const char *name, void *addr, int len) {
       const int bIdx = img - fisAddr();
 
       if (bIdx<fisNumReserved()) {
-	 /* num reserved files get burnt in place...
+	 /* up to numReserved files get burnt in place...
 	  */
 	 if (flash_unlock(img->flash_base, len)) {
 	    printf("fis create: can't unlock\r\n");
@@ -359,8 +367,6 @@ int fisCreate(const char *name, void *addr, int len) {
       last_block = flash_end - block_size;
       tblocks = (last_block - first_block + block_size - 1)/block_size;
 
-      /* FIXME: file contents should be hashed too!!!
-       */
       bloc = (unsigned) (first_block + block_size*hashFileName(name, tblocks));
 
       if ((idx = prevEntIdx(ents, ndirents, bloc))<0) {
@@ -389,7 +395,8 @@ int fisCreate(const char *name, void *addr, int len) {
 	    }
 	 }
 	 else {
-	    if (bloc + len < ents[idx*2+2]) {
+	    if ( (bloc + len < ents[idx*2+2]) && 
+		!flash_code_overlaps((void *) bloc, (void *)(bloc+len))) {
 	       /* found!!!
 		*/
 	       break;
@@ -417,7 +424,8 @@ int fisCreate(const char *name, void *addr, int len) {
       }
 
       if (flash_write((void *)bloc, addr, len)) {
-	 printf("fis create: can't write\r\n");
+	 printf("fis create: can't write: 0x%08x (%d) -> 0x%08x\r\n", 
+		(int)addr, len, bloc);
 	 return 1;
       }
       
@@ -474,6 +482,9 @@ int fisInit(void) {
    const int block_size = fisBlockSize();
    struct fis_image_desc *nimg;
    const struct fis_image_desc *dir;
+   int stat, err = 0;
+   unsigned chip_start[2], chip_end[2];
+   int i;
 
    /* verify...
     */
@@ -487,67 +498,105 @@ int fisInit(void) {
       nr = read(0, &c, 1);
 
       if (nr==1) {
+	 printf("%c\r\n", c); fflush(stdout);
 	 if (toupper(c)=='Y') break;
 	 else if (toupper(c)=='N') { return 1; }
-	 write(1, &c, 1);
       }
    }
 
    flash_get_limits(NULL, (void **)&flash_start, (void **)&flash_end);
    flash_start += numReservedBlocks() * fisBlockSize();
 
-   /* unlock all data -- except for iceboot (first 7 * 64K bytes)...
-    */
-   printf("unlock... "); fflush(stdout);
-   flash_unlock((void *)flash_start, flash_end - flash_start);
+   chip_start[0] = flash_start;
+   chip_start[1] = (unsigned) flash_chip_addr(1);
+   chip_end[0] = chip_start[1]-1;
+   chip_end[1] = flash_end;
+
+   for (i=0; i<2; i++) {
+      /* unlock all data -- except for iceboot (first 7 * 64K bytes)...
+       */
+      printf("chip %d: unlock... ", i); fflush(stdout);
+      if (flash_unlock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to unlock %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      
+      /* erase all data -- except for iceboot...
+       */
+      printf("erase... "); fflush(stdout);
+      if (flash_erase((void *) chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to erase %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      
+      /* lock all data -- except for iceboot...
+       */
+      printf("lock... "); fflush(stdout);
+      if (flash_lock((void *) chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to lock %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+
+      printf("\r\n");
+   }
    
-   /* erase all data -- except for iceboot...
-    */
-   printf("erase... "); fflush(stdout);
-   flash_erase((void *) flash_start, flash_end - flash_start);
-
-   /* lock all data -- except for iceboot...
-    */
-   printf("lock... "); fflush(stdout);
-   flash_unlock((void *)flash_start, flash_end - flash_start);
-
    /* setup directory -- with iceboot...
     */
-   printf("init directory... "); fflush(stdout);
+   printf("setup directory... "); fflush(stdout);
    
-   if ((nimg=smalloc(fis_image_desc))==NULL) {
+   if ((nimg=(struct fis_image_desc *)malloc(block_size))==NULL) {
       printf("\r\nfis init: unable to malloc image descriptor!\r\n");
       return 1;
    }
-   memset(nimg, 0xff, sizeof(struct fis_image_desc));
+   memset(nimg, 0xff, block_size);
 
    dir = fisAddr();
    
    flash_get_limits(NULL, (void **)&flash_start, (void **)&flash_end);
 
-   strncpy(nimg->name, "iceboot", 16);
-   nimg->name[15] = 0;
-   nimg->flash_base = (void *)flash_start;
-   nimg->mem_base = 0;
-   nimg->size = numReservedBlocks()*block_size;
-   nimg->entry_point = 0;
-   nimg->data_length = numReservedBlocks()*block_size;
-   updateDirectory(dir, nimg);
+   strncpy(nimg[0].name, "iceboot", 16);
+   nimg[0].name[15] = 0;
+   nimg[0].flash_base = (void *)flash_start;
+   nimg[0].mem_base = 0;
+   nimg[0].size = numReservedBlocks()*block_size;
+   nimg[0].entry_point = 0;
+   nimg[0].data_length = numReservedBlocks()*block_size;
    
-   strncpy(nimg->name, "iceboot config", 16);
-   nimg->name[15] = 0;
-   nimg->flash_base = 0;
-   nimg->mem_base = 0;
-   nimg->size = 0;
-   nimg->entry_point = 0;
-   nimg->data_length = 0;
-   updateDirectory(dir + 1, nimg);
+   strncpy(nimg[1].name, "iceboot config", 16);
+   nimg[1].name[15] = 0;
+   nimg[1].flash_base = 0;
+   nimg[1].mem_base = 0;
+   nimg[1].size = 0;
+   nimg[1].entry_point = 0;
+   nimg[1].data_length = 0;
+
+   /* Insure [quietly] that the directory is unlocked 
+    * before trying to update
+    */
+   flash_unlock(dir, block_size);
+
+   if ((stat = flash_erase(dir, block_size))) {
+      printf("Error erasing: %s\r\n", flash_errmsg(stat));
+      err = 1;
+   }
+   else {
+      /* Now program it
+       */
+      if ((stat = flash_write((void *)dir, nimg, block_size))) {
+	 printf("Error programming: %s\r\n", flash_errmsg(stat));
+	 err = 1;
+      }
+   }
+   
+   /* Insure [quietly] that the directory is locked after the update
+    */
+   flash_lock(dir, block_size);
 
    free(nimg);
 
    printf("done...\r\n");
    fflush(stdout);
    
-   return 0;
+   return err;
 }
 
