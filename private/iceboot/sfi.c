@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.1 $
+ * $Revision: 1.1.1.2 $
  * $Author: arthur $
- * $Date: 2005-11-09 23:22:29 $
+ * $Date: 2005-11-23 19:55:25 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -1988,6 +1988,11 @@ static const char *analogMuxInput(const char *p) {
    return p;
 }
 
+static const char *disableAnalogMux(const char *p) {
+   halDisableAnalogMux();
+   return p;
+}
+
 static int readTemp(void) { return halReadTemp(); }
 
 static float formatTemp(int temp) {
@@ -2970,6 +2975,7 @@ int main(int argc, char *argv[]) {
      { "boot-serial", serialReboot },
      { "boot-flash", flashReboot },
      { "analogMuxInput", analogMuxInput },
+     { "disableAnalogMux", disableAnalogMux },
      { "prtTemp", prtTemp },
      { "swicmd", swicmd },
      { "s\"", squote },

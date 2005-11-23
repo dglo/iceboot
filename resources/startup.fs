@@ -22,6 +22,11 @@
 15 1023 writeDAC
 
 \
+\ turn off the analog mux...
+\
+disableAnalogMux
+
+\
 \ exec program utilities...
 \
 : exec-gz gunzip exec ;
@@ -75,7 +80,7 @@ iceboot-sbi
 60  constant rdelay
 255 constant sdelay
 2   constant dacmax
-64  constant comthr
+55  constant comthr
 960 constant minclev
 980 constant maxclev
 
