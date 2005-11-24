@@ -80,7 +80,7 @@ iceboot-sbi
 60  constant rdelay
 255 constant sdelay
 2   constant dacmax
-55  constant comthr
+64  constant comthr
 960 constant minclev
 980 constant maxclev
 
