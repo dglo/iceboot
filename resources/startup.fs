@@ -27,22 +27,11 @@
 disableAnalogMux
 
 \
-\ set comm parameters...
-\
-64  constant comthr
-2   constant dacmax
-10  constant rdelay
-255 constant sdelay
-960 constant minclev
-970 constant maxclev
-: set-comm-params comthr dacmax rdelay sdelay minclev maxclev comm-params ;
-
-\
 \ exec program utilities...
 \
 : exec-gz gunzip exec ;
 : fpga-gz gunzip fpga ;
-: iceboot-sbi s" iceboot.sbi.gz" find if fpga-gz set-comm-params endif ;
+: iceboot-sbi s" iceboot.sbi" find if fpga endif ;
 
 \
 \ run stf server...
@@ -54,7 +43,7 @@ disableAnalogMux
 \ run domapp
 \
 : testdomapp s" testdomapp.gz" find if exec-gz endif ;
-: domapp-sbi s" domapp.sbi.gz" find if fpga-gz set-comm-params endif ;
+: domapp-sbi s" domapp.sbi" find if fpga endif ;
 : domapp domapp-sbi s" domapp.gz" find if exec-gz endif ;
 : domapp-test domapp-sbi s" domapp-test" find if exec endif ;
 
@@ -62,7 +51,7 @@ disableAnalogMux
 \ run echomode
 \
 : echo-mode s" echomode.gz" find if exec-gz endif ;
-: echo-mode-cb s" configboot.sbi.gz" find if fpga-gz echo-mode endif ;
+: echo-mode-cb s" cb.sbi.gz" find if fpga-gz echo-mode endif ;
 
 \
 \ run domcal
@@ -70,9 +59,33 @@ disableAnalogMux
 : domcal s" domcal.gz" find if exec-gz else s" domcal" find if exec endif endif
 
 \
+\ comm stuff...
+\
+$90081030 constant comctl
+$90081034 constant comstatus
+$90081038 constant comtx
+$9008103c constant comrx
+
+$90081080 constant comclev
+$90081084 constant comthrdel
+
+\
 \ load iceboot fpga...
 \
 iceboot-sbi
+
+\
+\ set comm parameters...
+\
+60  constant rdelay
+255 constant sdelay
+2   constant dacmax
+64  constant comthr
+960 constant minclev
+980 constant maxclev
+
+maxclev 16 lshift minclev or comclev !
+sdelay 24 lshift rdelay 16 lshift or dacmax 8 lshift or comthr or comthrdel !
 
 : yorn if s" yes" else s" no" endif type crlf type ;
 
@@ -136,5 +149,5 @@ CPLD $f + c@ constant boot-status
 : prt-boot-status-1 prt-n-por prt-n-reset prt-comm-reset ;
 : prt-boot-status prt-boot-status-0 prt-boot-status-1 ;
 
-: no-comm s" stf-nocomm.sbi.gz" find if fpga-gz endif ;
+: no-comm s" stf-nc.sbi.gz" find if fpga-gz endif ;
 : wiggle s" wiggle.gz" find if exec-gz endif ;

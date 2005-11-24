@@ -19,7 +19,4 @@ void addCFunc4Bucket(const char *nm, CFunc4 cf);
 void push(int );
 int  pop(void);
 
-const char * domID(const char *);
-const char * odump(const char *);
-
 #endif

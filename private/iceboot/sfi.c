@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.21 $
- * $Author: jacobsen $
- * $Date: 2007-08-22 15:58:18 $
+ * $Revision: 1.1.1.2 $
+ * $Author: arthur $
+ * $Date: 2005-11-23 19:55:25 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -106,8 +106,6 @@
 #include "osdep.h"
 #include "md5.h"
 #include "versions.h"
-#include "radio_hal.h"
-#include "radio_daq_hal.h"
 
 /* location and length of the buffer
  * used for acquisition...
@@ -997,16 +995,6 @@ static const char *icopy(const char *p) {
    
    for (i=0; i<n; i++) to[i] = from[i];
    return p;
-}
-
-/* are the two memory locations equal?
- */
-static int ieq(int addr1, int addr2, int n) {
-   const char *p1 = (const char *) addr1;
-   const char *p2 = (const char *) addr2;
-   int i;
-   for (i=0; i<n; i++) if (p1[i] != p2[i]) return 0;
-   return 1;
 }
 
 static const char *enableHV(const char *p) {
@@ -1907,11 +1895,11 @@ static const char *zdump(const char *p) {
   }
   err = deflateEnd(&zs);
   return p;
-}
+}   
 
 /* dump memory at address count
  */
-const char *odump(const char *p) {
+static const char *odump(const char *p) {
    const int cnt = pop();
    unsigned *addr = (unsigned *) pop();
    int i;
@@ -2095,7 +2083,7 @@ static const char *boardID(const char *p) {
    return p;
 }
 
-const char *domID(const char *p) {
+static const char *domID(const char *p) {
    const char *id = halGetBoardID();
    push((int) id);
    push(strlen(id));
@@ -2144,7 +2132,7 @@ static void prtCurrents(int rawCurrents) {
    /* voltages */
    const float volts[] = { 5, 3.3, 2.5, 1.8, -5 };
    /*                     5V  3.3V 2.5V 1.8V -5V */
-   const float gain[] = { 100, 10, 10,  10, 100 };
+   const float gain[] = { 100, 10, 10, 100, 100 };
    const float reff[] = { 1,   0.98, 0.80, 0.96, 1 };
    const float ueff[] = { 1,     1,    1, 1,   1 };
    const float *eff = (rawCurrents) ? ueff : reff;
@@ -2199,25 +2187,10 @@ static const char *doFisCreate(const char *p) {
 }
 
 static const char *doFisInit(const char *p) {
-   /* make sure... */
-   while (1) {
-      char c;
-      int nr;
-
-      printf("fis init: all data on flash will be lost: are you sure [y/n]? ");
-      fflush(stdout);
-
-      nr = read(0, &c, 1);
-
-      if (nr==1) {
-         printf("%c\r\n", c); fflush(stdout);
-         if (toupper(c)=='Y') break;
-         else if (toupper(c)=='N') { return p; }
-      }
-   }
    fisInit();
    return p;
 }
+
 
 static const char *doFisRm(const char *p) {
    char *s = (char *) mkString();
@@ -2233,15 +2206,11 @@ static const char *doFisUnlock(const char *p) {
    return p;
 }
 
+
 static const char *doFisLock(const char *p) {
    char *s = (char *) mkString();
    push(fisLock(s)==0 ? 1 : 0);
    free(s);
-   return p;
-}
-
-static const char *doFisGC(const char *p) {
-   fisGC();
    return p;
 }
 
@@ -2254,15 +2223,14 @@ static const char *doFisGC(const char *p) {
  */
 static const char *find(const char *p) {
    char *s = (char *) mkString();
-   unsigned long data_length;
-   void *flash_base = fisLookup(s, &data_length);
+   const struct fis_image_desc *img = fisLookup(s);
 
-   if (flash_base==NULL) {
+   if (img==NULL) {
       push(0);
    }
    else {
-      push((int) flash_base);
-      push((int) data_length);
+      push((int) img->flash_base);
+      push(img->data_length);
       push(1);
    }
    free(s);
@@ -2272,70 +2240,38 @@ static const char *find(const char *p) {
 /* search for and source startup.fs if it exists...
  */
 static void sourceStartup(void) {
-   unsigned long data_length;
-   void *flash_base = fisLookup("startup.fs", &data_length);
-   if (flash_base==NULL) return;
-   interpret((int) flash_base, (int) data_length);
+   const struct fis_image_desc *img = fisLookup("startup.fs");
+   if (img==NULL) return;
+   interpret((int) img->flash_base, img->data_length);
 }
 
-/* stack: addr count gzip [zaddr zcnt] 
+/* length address on stack (dropped)
+ * length address pushed on stack...
  */
-static const char *gzip(const char *p) {
-   const uLong srcLen = pop();
+static const char *zcompress(const char *p) {
    const Bytef *src = (const Byte *) pop();
-   uLongf destLen = 12 + srcLen * 101 / 100;
-   Bytef *dest = (Byte *) malloc(18 + destLen);
+   uLong srcLen = pop();
+   Bytef *dest = (Bytef *)malloc(12 + (int) (1.011*srcLen));
+   uLongf destLen;
 
-   if (dest==NULL) {
-      push(0); push(0);
-      return p;
+   compress(dest, &destLen, src, srcLen);
+
+   if (destLen>0) {
+      Bytef *ret = (Bytef *) malloc(destLen);
+      /* FIXME: prepend header..
+       */
+      memcpy(ret, dest, destLen);
+
+      /* FIXME: append crc32, isize...
+       */
+      push(destLen);
+      push((int) ret);
    }
-   
-   /* create gzip header... */
-   dest[0] = 0x1f; /* magic1 */
-   dest[1] = 0x8b; /* magic2 */
-   dest[2] = Z_DEFLATED; /* deflate */
-   dest[3] = 0;    /* no flags */
-   dest[4] = dest[5] = dest[6] = dest[7] = 0; /* no mtime */
-
-   /* compress data...
-    *
-    * this bit is a little funky.  we could write our own
-    * compress routine with -WBITS to turn off the header,
-    * but we're going to keep their routine and just start
-    * a bit earlier in the image...
-    */
-   if (compress(dest + 10 - 2, &destLen, src, srcLen)!=Z_OK) {
-      free(dest);
-      push(0); push(0);
-      return p;
+   else {
+      push(0);
+      push(0);
    }
-   
-   /* overwrite zlib header with gzip header */
-   dest[8] = 0;
-   dest[9] = 0x03; /* unix, for comparison to other files */
-
-   /* append crc32 and uncompressed size... 
-    *
-    * here, we overwrite the zlib adler32 with the gzip crc32...
-    */
-   {  uLong crc = crc32(crc32(0L, Z_NULL, 0), src, srcLen);
-     
-      dest[10 + destLen - 6 + 0] = crc&0xff;
-      dest[10 + destLen - 6 + 1] = (crc>>8)&0xff;
-      dest[10 + destLen - 6 + 2] = (crc>>16)&0xff;
-      dest[10 + destLen - 6 + 3] = (crc>>24)&0xff;
-   }
-
-   /* finally, the uncompressed file size... */
-   dest[10 + destLen - 6 + 4] = srcLen&0xff;
-   dest[10 + destLen - 6 + 5] = (srcLen>>8)&0xff;
-   dest[10 + destLen - 6 + 6] = (srcLen>>16)&0xff;
-   dest[10 + destLen - 6 + 7] = (srcLen>>24)&0xff;
-
-   /* FIXME: realloc doesn't work, why? */
-   push((int) dest);
-   push((int) destLen - 6 + 18);
+   free(dest);
    return p;
 }
 
@@ -2376,11 +2312,14 @@ static int uncomp(Bytef *dest, uLongf *destLen,
     }
     *destLen = stream.total_out;
 
+
     err = inflateEnd(&stream);
     return err;
 }
 
-/* stack: address count gunzip [zaddr zcount]
+
+/* length address on stack (dropped)...
+ * length address status pushed on stack...
  */
 static const char *gunzip(const char *p) {
    uLong srcLen = pop();
@@ -2561,37 +2500,6 @@ static void prtErr(int err) {
 }
 
 static int isInputData(void) { return halIsInputData(); }
-
-/* read binary data from stdin:
- *
- * input:  number of bytes to read
- * output: addr len of buffer where data sits or 0, 0 on error... 
- */
-static const char *readBin(const char *p) {
-   int nbytes=pop();
-   unsigned char *b = (unsigned char *) memalloc(nbytes);
-   int nr = 0;
-   while (nr<nbytes) {
-      const int nleft = nbytes - nr;
-      const int blksz = (nleft > 4092) ? 4092 : nleft;
-      int n;
-      
-      if ((n=read(0, b + nr, blksz))<=0) {
-         push(0);
-         push(0);
-         return p;
-      }
-      nr += n;
-   }
-   push((int) b);
-   push(nbytes);
-   return p;
-}
-
-const char *release(const char *p) {
-   printf("%s %s\r\n", versions.tag, versions.build);
-   return p;
-}
 
 #define PSKHACK
 #undef PSKHACK
@@ -3022,247 +2930,11 @@ static const char *doDumpFlash(const char *p) {
    return p;
 }
 
-static const char *commParams(const char *p) {
-   const int maxclev = pop();
-   const int minclev = pop();
-   const int sdelay = pop();
-   const int rdelay = pop();
-   const int dacmax = pop();
-   const int thresh = pop();
-   
-   hal_FPGA_set_comm_params(thresh, dacmax, rdelay, sdelay, minclev, maxclev);
-
-   return p;
-}
-
-/* returns nibble value or -1 if the 'c' is not
- * a nibble character...
- */
-static int nibble(char c) {
-   if (c>='0' && c<='9') return c - '0';
-   if (c>='a' && c<='f') return c - 'a' + 10;
-   if (c>='A' && c<='F') return c - 'A' + 10;
-   return -1;
-}
-
-/* convert intel hex format to a binary image...
- *
- * return number of checksum errors...
- *
- * FIXME: this is a piece of shit, rewrite it without
- * the stupid state machine (in about 1/4 the lines)...
- */
-static int hextobin(const char *hex, int hsize, unsigned char *img, int ilen) {
-   signed char ck=0, cksum=0;
-   int len = 0;
-   int nb = 0;
-   int offset = 0;
-   int ndata = 0;
-   int type = 0;
-   int addr = 0;
-   int shift = 0;
-   unsigned char data[128];
-   int idx = 0;
-   int ret = 0;
-   enum {
-      ST_START, ST_LEN0, ST_LEN1, /* 0, 1, 2 */
-      ST_ADDR0, ST_ADDR1, ST_ADDR2, ST_ADDR3, /* 3, 4, 5, 6 */
-      ST_TYPE0, ST_TYPE1, /* 7, 8 */
-      ST_DATA, /* 9, 10 */
-      ST_CK0, ST_CK1, /* 11, 12 */
-      ST_OFFSET0, ST_OFFSET1, ST_OFFSET2, ST_OFFSET3 /* 13, 14, 15, 16, 17 */
-   } state = ST_START;
-
-   while (idx<hsize) {
-      const char c = hex[idx]; idx++;
-
-      if (state==ST_START) {
-	 if (c==':') {
-	    ck=0;
-	    cksum=0;
-	    state = ST_LEN0;
-	 }
-      }
-      else if (state==ST_LEN0) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    len = n;
-	    state=ST_LEN1;
-	 }
-      }
-      else if (state==ST_LEN1) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    len<<=4;
-	    len+=n;
-	    cksum=len;
-	    addr = 0;
-	    state=ST_ADDR0;
-	 }
-      }
-      else if (state==ST_ADDR0) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    addr = n;
-	    state = ST_ADDR1;
-	 }
-      }
-      else if (state==ST_ADDR1) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    addr <<= 4;
-	    addr += n;
-	    cksum += addr;
-	    state = ST_ADDR2;
-	 }
-      }
-      else if (state==ST_ADDR2) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    addr <<= 4;
-	    addr += n;
-	    state = ST_ADDR3;
-	 }
-      }
-      else if (state==ST_ADDR3) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    addr <<= 4;
-	    addr += n;
-	    cksum+= (addr&0xff);
-	    type = 0;
-	    state = ST_TYPE0;
-	 }
-      }
-      else if (state==ST_TYPE0) {
-	 int n = nibble(c);
-	 if (n==0) {
-	    state = ST_TYPE1;
-	 }
-      }
-      else if (state==ST_TYPE1) {
-	 int n = nibble(c);
-	 if (n==0) {
-	    ndata = 0;
-	    nb = 0;
-	    state = ST_DATA;
-	 }
-	 else if (n==1) {
-	    /* last record! */
-	    cksum += 1;
-	    state = ST_CK0;
-	 }
-	 else if (n==2) {
-	    offset = 0;
-	    cksum += 2;
-	    shift = 4;
-	    state = ST_OFFSET0;
-	 }
-	 else if (n==4) {
-	    offset = 0;
-	    cksum += 4;
-	    shift = 16;
-	    state = ST_OFFSET0;
-	 }
-      }
-      else if (state==ST_OFFSET0) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    offset = n;
-	    state = ST_OFFSET1;
-	 }
-      }
-      else if (state==ST_OFFSET1) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    offset<<=4;
-	    offset += n;
-	    cksum += offset;
-	    state = ST_OFFSET2;
-	 }
-      }
-      else if (state==ST_OFFSET2) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    offset <<= 4;
-	    offset += n;
-	    state = ST_OFFSET3;
-	 }
-      }
-      else if (state==ST_OFFSET3) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    offset <<= 4;
-	    offset += n;
-	    ck = 0;
-	    cksum += (offset&0xff);
-	    offset <<= shift;
-	    state = ST_CK0;
-	 }
-      }
-      else if (state==ST_DATA) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    if (nb==0) {
-	       data[ndata] = n;
-	       nb++;
-	    }
-	    else {
-	       data[ndata]<<=4;
-	       data[ndata]+=n;
-	       cksum+=data[ndata];
-	       ndata++;
-	       if (ndata==len) {
-		  ck = 0;
-		  state = ST_CK0;
-
-                  /* FIXME: check for overflow... */
-                  memcpy(img + offset + addr, data, ndata);
-	       }
-	       nb=0;
-	    }
-	 }
-      }
-      else if (state==ST_CK0) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    ck = n;
-	    state = ST_CK1;
-	 }
-      }
-      else if (state==ST_CK1) {
-	 int n = nibble(c);
-	 if (n>=0) {
-	    ck <<= 4;
-	    ck += n;
-            cksum += ck;
-            
-            if ( cksum != 0 ) ret++;
-            
-            cksum = 0;
-            state = ST_START;
-	 }
-      }
-   }
-
-   return ret;
-}
-
-static const char *hexToBinCmd(const char *p) {
-   const int imglen = pop();
-   unsigned char *img = (unsigned char *) pop();
-   const int hexlen = pop();
-   const char *hex = (const char *) pop();
-   push(hextobin(hex, hexlen, img, imglen));
-   return p;
-}
-
 int main(int argc, char *argv[]) {
   char *line;
   const int linesz = 256;
   static int rawCurrents = 1;
   static int disableCurrents = 1;
-  extern int flashBurnImage(int imgint, int wlen);
 
   static struct {
     const char *nm;
@@ -3317,8 +2989,8 @@ int main(int argc, char *argv[]) {
      { "invalidateICache", invalidateICache },
      { "exec", execBin },
      { "find", find },
+     { "compress", zcompress },
      { "gunzip", gunzip },
-     { "gzip", gzip },
      { "ls",  doFisList },
      { "rm", doFisRm },
      { "lock", doFisLock },
@@ -3364,34 +3036,6 @@ int main(int argc, char *argv[]) {
      { "psk-lock", doPskLock },
 #endif
      { "dump-flash", doDumpFlash },
-     { "comm-params", commParams },
-     { "hex-to-bin", hexToBinCmd },
-     { "read-bin", readBin },
-     { "release", release },
-     { "fis-gc", doFisGC },
-     /* Begin AURA/radio stuff */
-     {"rr",radio_r},
-     {"rw",radio_w},
-     {"rwloop",radio_w_loop},
-     {"radio_readDAC",radio_readDAC},
-     {"radio_readScaler",radio_readScaler},
-     {"radio_fifo",radio_fifo},
-     {"ref2mb",reflection2mb},
-     {"Radio_reflection",reflection},
-     {"mb_reflection",mbreflection},
-     {"RRRF",read_reflection},
-     {"ratwd_time",radio_atwd_time},
-     {"ratwd_parse",radio_atwd_parse},
-     {"writev",write_v},
-     {"readv",read_v},
-     {"radioStat",radio_stat},
-     {"forcedtrig",forced_trig},
-     {"radiotrig",radio_trig},
-     {"TracrTime",Radio_TCal},
-     {"bd",bdumpi},
-     {"dumpscaler",radio_dumpscaler},
-     {"enableFBminY", enableFBminY},
-     /* End AURA/radio stuff */
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -3449,10 +3093,10 @@ int main(int argc, char *argv[]) {
     { "fpga", do_fpga_config },
     { "interpret", interpret },
     { "fb-cpld", do_fb_cpld_config },
-    { "install-image", flashBurnImage },
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
 
+#if defined(PSKHACK)
   static struct {
     const char *nm;
     CFunc3 cf;
@@ -3460,13 +3104,13 @@ int main(int argc, char *argv[]) {
      /* don't forget to document these commands
       * at the top of this file!
       */
-    { "ieq", ieq },
 #if defined(PSKHACK)
     { "psk-echo-mode", pskEchoMode },
     { "psk-echo-test", pskEchoTest },
 #endif
   };
   const int nInitCFuncs3 = sizeof(initCFuncs3)/sizeof(initCFuncs3[0]);
+#endif
 
   static struct {
     const char *nm;
@@ -3516,8 +3160,10 @@ int main(int argc, char *argv[]) {
   for (i=0; i<nInitCFuncs2; i++) 
     addCFunc2Bucket(initCFuncs2[i].nm, initCFuncs2[i].cf);
 
+#if defined(PSKHACK)
   for (i=0; i<nInitCFuncs3; i++) 
     addCFunc3Bucket(initCFuncs3[i].nm, initCFuncs3[i].cf);
+#endif
 
   for (i=0; i<nInitConstants; i++) 
     addConstantBucket(initConstants[i].nm, initConstants[i].constant);

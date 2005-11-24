@@ -5,7 +5,7 @@
 #
 .SUFFIXES: .c .o .elf .bin
 
-%.o : %.c *.h
+.c.o:
 	$(CC) -c $(CFLAGS) $<
 
 all: $(SFIBIN)
@@ -21,7 +21,7 @@ clean:
 	$(OBJCOPY) -O binary $*-raw.elf $*.bin
 
 SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o fis.o install.o \
-	md5.o radio_daq_hal.o
+	md5.o
 YMOBJS = $(CRT0) $(LIBK) ymodem.o osdep.o
 LBOBJS = $(CRT0) $(LIBK) lookback.o
 
