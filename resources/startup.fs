@@ -27,11 +27,22 @@
 disableAnalogMux
 
 \
+\ set comm parameters...
+\
+64  constant comthr
+2   constant dacmax
+10  constant rdelay
+255 constant sdelay
+960 constant minclev
+970 constant maxclev
+: set-comm-params comthr dacmax rdelay sdelay minclev maxclev comm-params ;
+
+\
 \ exec program utilities...
 \
 : exec-gz gunzip exec ;
 : fpga-gz gunzip fpga ;
-: iceboot-sbi s" iceboot.sbi" find if fpga endif ;
+: iceboot-sbi s" iceboot.sbi" find if fpga set-comm-params endif ;
 
 \
 \ run stf server...
@@ -59,33 +70,9 @@ disableAnalogMux
 : domcal s" domcal.gz" find if exec-gz else s" domcal" find if exec endif endif
 
 \
-\ comm stuff...
-\
-$90081030 constant comctl
-$90081034 constant comstatus
-$90081038 constant comtx
-$9008103c constant comrx
-
-$90081080 constant comclev
-$90081084 constant comthrdel
-
-\
 \ load iceboot fpga...
 \
 iceboot-sbi
-
-\
-\ set comm parameters...
-\
-60  constant rdelay
-255 constant sdelay
-2   constant dacmax
-64  constant comthr
-960 constant minclev
-980 constant maxclev
-
-maxclev 16 lshift minclev or comclev !
-sdelay 24 lshift rdelay 16 lshift or dacmax 8 lshift or comthr or comthrdel !
 
 : yorn if s" yes" else s" no" endif type crlf type ;
 

@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.2 $
+ * $Revision: 1.1.1.3 $
  * $Author: arthur $
- * $Date: 2005-11-23 19:55:25 $
+ * $Date: 2005-12-08 19:15:05 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -2501,6 +2501,37 @@ static void prtErr(int err) {
 
 static int isInputData(void) { return halIsInputData(); }
 
+/* read binary data from stdin:
+ *
+ * input:  number of bytes to read
+ * output: addr len of buffer where data sits or 0, 0 on error... 
+ */
+static const char *readBin(const char *p) {
+   int nbytes=pop();
+   unsigned char *b = (unsigned char *) memalloc(nbytes);
+   int nr = 0;
+   while (nr<nbytes) {
+      const int nleft = nbytes - nr;
+      const int blksz = (nleft > 4092) ? 4092 : nleft;
+      int n;
+      
+      if ((n=read(0, b + nr, blksz))<=0) {
+         push(0);
+         push(0);
+         return p;
+      }
+      nr += n;
+   }
+   push((int) b);
+   push(nbytes);
+   return p;
+}
+
+const char *release(const char *p) {
+   printf("%s %s\r\n", versions.tag, versions.build);
+   return p;
+}
+
 #define PSKHACK
 #undef PSKHACK
 
@@ -2930,11 +2961,247 @@ static const char *doDumpFlash(const char *p) {
    return p;
 }
 
+static const char *commParams(const char *p) {
+   const int maxclev = pop();
+   const int minclev = pop();
+   const int sdelay = pop();
+   const int rdelay = pop();
+   const int dacmax = pop();
+   const int thresh = pop();
+   
+   hal_FPGA_set_comm_params(thresh, dacmax, rdelay, sdelay, minclev, maxclev);
+
+   return p;
+}
+
+/* returns nibble value or -1 if the 'c' is not
+ * a nibble character...
+ */
+static int nibble(char c) {
+   if (c>='0' && c<='9') return c - '0';
+   if (c>='a' && c<='f') return c - 'a' + 10;
+   if (c>='A' && c<='F') return c - 'A' + 10;
+   return -1;
+}
+
+/* convert intel hex format to a binary image...
+ *
+ * return number of checksum errors...
+ *
+ * FIXME: this is a piece of shit, rewrite it without
+ * the stupid state machine (in about 1/4 the lines)...
+ */
+static int hextobin(const char *hex, int hsize, unsigned char *img, int ilen) {
+   signed char ck=0, cksum=0;
+   int len = 0;
+   int nb = 0;
+   int offset = 0;
+   int ndata = 0;
+   int type = 0;
+   int addr = 0;
+   int shift = 0;
+   unsigned char data[128];
+   int idx = 0;
+   int ret = 0;
+   enum {
+      ST_START, ST_LEN0, ST_LEN1, /* 0, 1, 2 */
+      ST_ADDR0, ST_ADDR1, ST_ADDR2, ST_ADDR3, /* 3, 4, 5, 6 */
+      ST_TYPE0, ST_TYPE1, /* 7, 8 */
+      ST_DATA, /* 9, 10 */
+      ST_CK0, ST_CK1, /* 11, 12 */
+      ST_OFFSET0, ST_OFFSET1, ST_OFFSET2, ST_OFFSET3 /* 13, 14, 15, 16, 17 */
+   } state = ST_START;
+
+   while (idx<hsize) {
+      const char c = hex[idx]; idx++;
+
+      if (state==ST_START) {
+	 if (c==':') {
+	    ck=0;
+	    cksum=0;
+	    state = ST_LEN0;
+	 }
+      }
+      else if (state==ST_LEN0) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    len = n;
+	    state=ST_LEN1;
+	 }
+      }
+      else if (state==ST_LEN1) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    len<<=4;
+	    len+=n;
+	    cksum=len;
+	    addr = 0;
+	    state=ST_ADDR0;
+	 }
+      }
+      else if (state==ST_ADDR0) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    addr = n;
+	    state = ST_ADDR1;
+	 }
+      }
+      else if (state==ST_ADDR1) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    addr <<= 4;
+	    addr += n;
+	    cksum += addr;
+	    state = ST_ADDR2;
+	 }
+      }
+      else if (state==ST_ADDR2) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    addr <<= 4;
+	    addr += n;
+	    state = ST_ADDR3;
+	 }
+      }
+      else if (state==ST_ADDR3) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    addr <<= 4;
+	    addr += n;
+	    cksum+= (addr&0xff);
+	    type = 0;
+	    state = ST_TYPE0;
+	 }
+      }
+      else if (state==ST_TYPE0) {
+	 int n = nibble(c);
+	 if (n==0) {
+	    state = ST_TYPE1;
+	 }
+      }
+      else if (state==ST_TYPE1) {
+	 int n = nibble(c);
+	 if (n==0) {
+	    ndata = 0;
+	    nb = 0;
+	    state = ST_DATA;
+	 }
+	 else if (n==1) {
+	    /* last record! */
+	    cksum += 1;
+	    state = ST_CK0;
+	 }
+	 else if (n==2) {
+	    offset = 0;
+	    cksum += 2;
+	    shift = 4;
+	    state = ST_OFFSET0;
+	 }
+	 else if (n==4) {
+	    offset = 0;
+	    cksum += 4;
+	    shift = 16;
+	    state = ST_OFFSET0;
+	 }
+      }
+      else if (state==ST_OFFSET0) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    offset = n;
+	    state = ST_OFFSET1;
+	 }
+      }
+      else if (state==ST_OFFSET1) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    offset<<=4;
+	    offset += n;
+	    cksum += offset;
+	    state = ST_OFFSET2;
+	 }
+      }
+      else if (state==ST_OFFSET2) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    offset <<= 4;
+	    offset += n;
+	    state = ST_OFFSET3;
+	 }
+      }
+      else if (state==ST_OFFSET3) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    offset <<= 4;
+	    offset += n;
+	    ck = 0;
+	    cksum += (offset&0xff);
+	    offset <<= shift;
+	    state = ST_CK0;
+	 }
+      }
+      else if (state==ST_DATA) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    if (nb==0) {
+	       data[ndata] = n;
+	       nb++;
+	    }
+	    else {
+	       data[ndata]<<=4;
+	       data[ndata]+=n;
+	       cksum+=data[ndata];
+	       ndata++;
+	       if (ndata==len) {
+		  ck = 0;
+		  state = ST_CK0;
+
+                  /* FIXME: check for overflow... */
+                  memcpy(img + offset + addr, data, ndata);
+	       }
+	       nb=0;
+	    }
+	 }
+      }
+      else if (state==ST_CK0) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    ck = n;
+	    state = ST_CK1;
+	 }
+      }
+      else if (state==ST_CK1) {
+	 int n = nibble(c);
+	 if (n>=0) {
+	    ck <<= 4;
+	    ck += n;
+            cksum += ck;
+            
+            if ( cksum != 0 ) ret++;
+            
+            cksum = 0;
+            state = ST_START;
+	 }
+      }
+   }
+
+   return ret;
+}
+
+static const char *hexToBinCmd(const char *p) {
+   const int imglen = pop();
+   unsigned char *img = (unsigned char *) pop();
+   const int hexlen = pop();
+   const char *hex = (const char *) pop();
+   push(hextobin(hex, hexlen, img, imglen));
+   return p;
+}
+
 int main(int argc, char *argv[]) {
   char *line;
   const int linesz = 256;
   static int rawCurrents = 1;
   static int disableCurrents = 1;
+  extern int flashBurnImage(int imgint, int wlen);
 
   static struct {
     const char *nm;
@@ -3036,6 +3303,10 @@ int main(int argc, char *argv[]) {
      { "psk-lock", doPskLock },
 #endif
      { "dump-flash", doDumpFlash },
+     { "comm-params", commParams },
+     { "hex-to-bin", hexToBinCmd },
+     { "read-bin", readBin },
+     { "release", release },
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
@@ -3093,6 +3364,7 @@ int main(int argc, char *argv[]) {
     { "fpga", do_fpga_config },
     { "interpret", interpret },
     { "fb-cpld", do_fb_cpld_config },
+    { "install-image", flashBurnImage },
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
 
