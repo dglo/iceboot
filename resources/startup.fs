@@ -54,7 +54,7 @@ disableAnalogMux
 \ run domapp
 \
 : testdomapp s" testdomapp.gz" find if exec-gz endif ;
-: domapp-sbi s" domapp.sbi" find if fpga endif ;
+: domapp-sbi s" domapp.sbi" find if fpga set-comm-params endif ;
 : domapp domapp-sbi s" domapp.gz" find if exec-gz endif ;
 : domapp-test domapp-sbi s" domapp-test" find if exec endif ;
 
