@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.8 $
+ * $Revision: 1.1.1.9 $
  * $Author: arthur $
- * $Date: 2006-04-07 17:50:23 $
+ * $Date: 2006-04-19 20:30:33 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -997,6 +997,16 @@ static const char *icopy(const char *p) {
    return p;
 }
 
+/* are the two memory locations equal?
+ */
+static int ieq(int addr1, int addr2, int n) {
+   const char *p1 = (const char *) addr1;
+   const char *p2 = (const char *) addr2;
+   int i;
+   for (i=0; i<n; i++) if (p1[i] != p2[i]) return 0;
+   return 1;
+}
+
 static const char *enableHV(const char *p) {
    halPowerUpBase();
    halEnableBaseHV();
@@ -1895,7 +1905,7 @@ static const char *zdump(const char *p) {
   }
   err = deflateEnd(&zs);
   return p;
-}   
+}
 
 /* dump memory at address count
  */
@@ -2245,33 +2255,64 @@ static void sourceStartup(void) {
    interpret((int) img->flash_base, img->data_length);
 }
 
-/* length address on stack (dropped)
- * length address pushed on stack...
+/* stack: addr count gzip [zaddr zcnt] 
  */
-static const char *zcompress(const char *p) {
+static const char *gzip(const char *p) {
+   const uLong srcLen = pop();
    const Bytef *src = (const Byte *) pop();
-   uLong srcLen = pop();
-   Bytef *dest = (Bytef *)malloc(12 + (int) (1.011*srcLen));
-   uLongf destLen;
+   uLongf destLen = 12 + srcLen * 101 / 100;
+   Bytef *dest = (Byte *) malloc(18 + destLen);
 
-   compress(dest, &destLen, src, srcLen);
-
-   if (destLen>0) {
-      Bytef *ret = (Bytef *) malloc(destLen);
-      /* FIXME: prepend header..
-       */
-      memcpy(ret, dest, destLen);
-
-      /* FIXME: append crc32, isize...
-       */
-      push(destLen);
-      push((int) ret);
+   if (dest==NULL) {
+      push(0); push(0);
+      return p;
    }
-   else {
-      push(0);
-      push(0);
+   
+   /* create gzip header... */
+   dest[0] = 0x1f; /* magic1 */
+   dest[1] = 0x8b; /* magic2 */
+   dest[2] = Z_DEFLATED; /* deflate */
+   dest[3] = 0;    /* no flags */
+   dest[4] = dest[5] = dest[6] = dest[7] = 0; /* no mtime */
+
+   /* compress data...
+    *
+    * this bit is a little funky.  we could write our own
+    * compress routine with -WBITS to turn off the header,
+    * but we're going to keep their routine and just start
+    * a bit earlier in the image...
+    */
+   if (compress(dest + 10 - 2, &destLen, src, srcLen)!=Z_OK) {
+      free(dest);
+      push(0); push(0);
+      return p;
    }
-   free(dest);
+   
+   /* overwrite zlib header with gzip header */
+   dest[8] = 0;
+   dest[9] = 0x03; /* unix, for comparison to other files */
+
+   /* append crc32 and uncompressed size... 
+    *
+    * here, we overwrite the zlib adler32 with the gzip crc32...
+    */
+   {  uLong crc = crc32(crc32(0L, Z_NULL, 0), src, srcLen);
+     
+      dest[10 + destLen - 6 + 0] = crc&0xff;
+      dest[10 + destLen - 6 + 1] = (crc>>8)&0xff;
+      dest[10 + destLen - 6 + 2] = (crc>>16)&0xff;
+      dest[10 + destLen - 6 + 3] = (crc>>24)&0xff;
+   }
+
+   /* finally, the uncompressed file size... */
+   dest[10 + destLen - 6 + 4] = srcLen&0xff;
+   dest[10 + destLen - 6 + 5] = (srcLen>>8)&0xff;
+   dest[10 + destLen - 6 + 6] = (srcLen>>16)&0xff;
+   dest[10 + destLen - 6 + 7] = (srcLen>>24)&0xff;
+
+   /* FIXME: realloc doesn't work, why? */
+   push((int) dest);
+   push((int) destLen - 6 + 18);
    return p;
 }
 
@@ -2312,14 +2353,11 @@ static int uncomp(Bytef *dest, uLongf *destLen,
     }
     *destLen = stream.total_out;
 
-
     err = inflateEnd(&stream);
     return err;
 }
 
-
-/* length address on stack (dropped)...
- * length address status pushed on stack...
+/* stack: address count gunzip [zaddr zcount]
  */
 static const char *gunzip(const char *p) {
    uLong srcLen = pop();
@@ -3256,8 +3294,8 @@ int main(int argc, char *argv[]) {
      { "invalidateICache", invalidateICache },
      { "exec", execBin },
      { "find", find },
-     { "compress", zcompress },
      { "gunzip", gunzip },
+     { "gzip", gzip },
      { "ls",  doFisList },
      { "rm", doFisRm },
      { "lock", doFisLock },
@@ -3368,7 +3406,6 @@ int main(int argc, char *argv[]) {
   };
   const int nInitCFuncs2 = sizeof(initCFuncs2)/sizeof(initCFuncs2[0]);
 
-#if defined(PSKHACK)
   static struct {
     const char *nm;
     CFunc3 cf;
@@ -3376,13 +3413,13 @@ int main(int argc, char *argv[]) {
      /* don't forget to document these commands
       * at the top of this file!
       */
+    { "ieq", ieq },
 #if defined(PSKHACK)
     { "psk-echo-mode", pskEchoMode },
     { "psk-echo-test", pskEchoTest },
 #endif
   };
   const int nInitCFuncs3 = sizeof(initCFuncs3)/sizeof(initCFuncs3[0]);
-#endif
 
   static struct {
     const char *nm;
@@ -3432,10 +3469,8 @@ int main(int argc, char *argv[]) {
   for (i=0; i<nInitCFuncs2; i++) 
     addCFunc2Bucket(initCFuncs2[i].nm, initCFuncs2[i].cf);
 
-#if defined(PSKHACK)
   for (i=0; i<nInitCFuncs3; i++) 
     addCFunc3Bucket(initCFuncs3[i].nm, initCFuncs3[i].cf);
-#endif
 
   for (i=0; i<nInitConstants; i++) 
     addConstantBucket(initConstants[i].nm, initConstants[i].constant);

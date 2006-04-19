@@ -386,10 +386,11 @@ int flashBurnImage(int imgint, int wlen) {
       while (idx<wlen && img[idx]==0xffff) idx++;
 
       if (idx<wlen) {
-         const int c1idx = chip_start[1] - chip_start[0];
+         const int c1idx = (chip_start[1] - chip_start[0])/2;
          int eidx = idx + 1;
 
-         while (eidx<wlen && ((idx<c1idx && eidx<c1idx) || idx>=c1idx) &&
+         while (eidx<wlen && 
+                ((idx<c1idx && eidx<c1idx) || idx>=c1idx) &&
                 img[eidx]!=0xffff) {
             eidx++;
          }
