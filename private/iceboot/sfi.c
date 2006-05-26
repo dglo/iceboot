@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.11 $
+ * $Revision: 1.1.1.12 $
  * $Author: arthur $
- * $Date: 2006-05-09 22:42:23 $
+ * $Date: 2006-05-26 20:49:47 $
  */
 #include <stdio.h>
 #include <string.h>
