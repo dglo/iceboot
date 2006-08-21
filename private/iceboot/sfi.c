@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.17 $
+ * $Revision: 1.1.1.18 $
  * $Author: jacobsen $
- * $Date: 2006-08-21 15:45:13 $
+ * $Date: 2006-08-21 15:47:18 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -2231,11 +2231,15 @@ static const char *doFisUnlock(const char *p) {
    return p;
 }
 
-
 static const char *doFisLock(const char *p) {
    char *s = (char *) mkString();
    push(fisLock(s)==0 ? 1 : 0);
    free(s);
+   return p;
+}
+
+static const char *doFisGC(const char *p) {
+   fisGC();
    return p;
 }
 
@@ -3362,6 +3366,7 @@ int main(int argc, char *argv[]) {
      { "hex-to-bin", hexToBinCmd },
      { "read-bin", readBin },
      { "release", release },
+     { "fis-gc", doFisGC },
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 

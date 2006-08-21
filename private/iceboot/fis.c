@@ -627,14 +627,16 @@ static void extentGC(struct lfis_extent *ext, void *flash) {
    }
 
    /* reload root dir in ram... */
-   dl = direntListRoot(rext, rflash);
+   dlsave = direntListRoot(rext, rflash);
    
    /* validate crcs of non-fixed data... */
    for (dlp=NULL, dl=dlsave; dl!=NULL; dlp=dl, dl=dl->next) {
       struct lfis_ino *ino = dl->ext->inodes + dl->dirent->ino;
+
       if ( (ino->mode & LFIS_MODE_FIXED) == 0 && ino->length>0) {
          const unsigned crc = 
             crc32(blockAddress(rflash, ino->block), ino->length);
+
          if (crc!=ino->blk_crc32) {
             struct dirent_list *t = dl;
             /* dlp is not null because iceboot is always first... */
@@ -655,7 +657,7 @@ static void extentGC(struct lfis_extent *ext, void *flash) {
 
       if (ino->mode & LFIS_MODE_FIXED) {
          void *data;
-         
+
          if (ino->mode & LFIS_MODE_BAD) {
             data = NULL;
          }
@@ -663,8 +665,8 @@ static void extentGC(struct lfis_extent *ext, void *flash) {
             data = blockAddress(rflash, ino->block);
          }
 
-         if (extentAddEnt(ext, flash, dl->dirent->name, ino, data)) {
-            fprintf(stderr, "gc: yikes!!!\r\n");
+         if (extentAddEnt(ext, flash, dl->dirent->name, ino, data)<0) {
+            fprintf(stderr, "fis gc: yikes!!!\r\n");
          }
       }
    }
@@ -676,11 +678,11 @@ static void extentGC(struct lfis_extent *ext, void *flash) {
       if ((ino->mode & LFIS_MODE_FIXED)==0) {
          void *data = blockAddress(rflash, ino->block);
 
-         if (extentAddEnt(ext, flash, dl->dirent->name, ino, data)) {
-            fprintf(stderr, "gc: yikes!!!\r\n");
+         if (extentAddEnt(ext, flash, dl->dirent->name, ino, data)<0) {
+            fprintf(stderr, "fis gc: yikes!!!\r\n");
          }
       }
-   }   
+   }
 
    /* all done, clean up... */
    direntListFree(dlsave);
@@ -852,7 +854,6 @@ void *fisLookup(const char *name, unsigned long *data_length) {
    if (mem!=NULL) {
       struct dirent_list *dl, *dlsave = lfisLookup(mem, name);
       
-      /* found it! */
       for (dl = dlsave; dl!=NULL; dl = dl->next) {
          struct lfis_ino *ino = dl->ext->inodes + dl->dirent->ino;
 
@@ -867,8 +868,10 @@ void *fisLookup(const char *name, unsigned long *data_length) {
             }
             else {
                /* data are bad, just remove the thing! */
-               extentRemoveEnt(dl->ext, dl->flash, 
-                               dl->dirent->ino, dl->dirent->name);
+               if ((ino->mode & LFIS_MODE_FIXED)==0) {
+                  extentRemoveEnt(dl->ext, dl->flash, 
+                                  dl->dirent->ino, dl->dirent->name);
+               }
             }
          }
       }
@@ -1036,6 +1039,19 @@ int fisCreate(const char *name, void *addr, int len) {
       direntListFree(dlsave);
    }
    return ret;
+}
+
+void fisGC(void) {
+   struct lfis_inmem *mem = lfisInMem();
+
+   if (mem!=NULL) {
+      int i;
+   
+      for (i=0; i<lengthof(mem->exts); i++) {
+         struct lfis_extent *ext = mem->exts[i].ext;
+         if (ext!=NULL) extentGC(ext, mem->exts[i].flash);
+      }
+   }
 }
 
 #if defined(TESTING)
