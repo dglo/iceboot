@@ -501,7 +501,7 @@ static int extentAddEntNoDir(struct lfis_extent *ext,
       
       /* write data */
       if (data == NULL || nino.length==0 || 
-          (nino.mode & LFIS_MODE_BAD) == 0 ||
+          (nino.mode & LFIS_MODE_BAD) != 0 ||
           flash_write(blockAddress(flash, nino.block), data, nino.length)==0) {
          break;
       }
