@@ -108,7 +108,9 @@ static struct dirent_list *direntListFilterDeletes(struct dirent_list *top) {
          dl = dl->next;
       }
       else {
-         printf("yikes!\r\n");
+         printf("filter deletes: yikes! action=%d\r\n", dl->dirent->action);
+         prev = dl;
+         dl = dl->next;
       }
    }
    return top;
@@ -277,7 +279,10 @@ static struct dirent_list *direntListCreate(struct lfis_dirent *de,
 
 static struct dirent_list *direntListRoot(struct lfis_extent *ext, 
                                           void *flash) {
-   return direntListCreate(ext->root, lengthof(ext->root), ext, flash);
+   return 
+      direntListFilterDeletes(direntListCreate(ext->root, 
+                                               lengthof(ext->root), 
+                                               ext, flash));
 }
 
 /* create master dirent list... */
@@ -404,8 +409,10 @@ static unsigned extentAddExtent(void *flash, struct lfis_extent *ext) {
 static unsigned extentAllocBlocks(struct lfis_extent *ext, int nbytes) {
    const int nblocks = (nbytes + LFIS_BLOCK_SIZE - 1) / LFIS_BLOCK_SIZE;
    const unsigned extblocks = ext->eblock - ext->sblock + 1;
-   char *blks = (char *) malloc(extblocks);
+   char *blks;
    unsigned i;
+
+   if (nblocks<=0 || (blks=(char *) malloc(extblocks))==NULL) return -1;
 
    memset(blks, 0, extblocks);
    for (i=0; i<lengthof(ext->inodes); i++) {
@@ -413,25 +420,30 @@ static unsigned extentAllocBlocks(struct lfis_extent *ext, int nbytes) {
           ext->inodes[i].block!=(unsigned) -1) {
          const int n = 
             (ext->inodes[i].length + LFIS_BLOCK_SIZE - 1)/LFIS_BLOCK_SIZE;
-         int j;
-         for (j=0; j<n; j++) blks[ext->inodes[i].block + j] = 1;
+         memset(blks + ext->inodes[i].block, 1, n);
       }
    }
 
-   for (i=0; i<extblocks; i++) {
+   while (i + nblocks - 1 < extblocks) {
       if (blks[i]==0) {
-         int n=1;
-
-         i++;
-         while (n<nblocks && i<extblocks && blks[i]==0) {
-            i++;
-            n++;
+         int j = i+1;
+         
+         while ( j - i < nblocks && blks[j] == 0 ) {
+            j++;
          }
-         if (n==nblocks) {
-            /* found! */
+
+         if ( j-i == nblocks ) {
+            /* found */
             free(blks);
             return i;
          }
+         else {
+            printf("skipped: i=%d, j=%d\r\n", i, j);
+            i = j;
+         }
+      }
+      else {
+         i++;
       }
    }
 
@@ -658,7 +670,7 @@ static void extentGC(struct lfis_extent *ext, void *flash) {
       if (ino->mode & LFIS_MODE_FIXED) {
          void *data;
 
-         if (ino->mode & LFIS_MODE_BAD) {
+         if (ino->mode & (LFIS_MODE_BAD|LFIS_MODE_EXTENT)) {
             data = NULL;
          }
          else {
