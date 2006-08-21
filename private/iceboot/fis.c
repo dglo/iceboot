@@ -166,7 +166,7 @@ static struct dirent_list *direntListAdd(struct dirent_list *top,
        crc32(de, sizeof(struct lfis_dirent)-4)==de->crc32) {
       struct dirent_list *t, *prev;
       const unsigned seqn = ext->inodes[de->ino].seqn;
-      
+
       for (t=top, prev=NULL; t!=NULL; prev=t, t=t->next) {
          if (strcmp(t->dirent->name, de->name)==0) {
             const unsigned oseqn = t->ext->inodes[t->dirent->ino].seqn;
@@ -222,22 +222,9 @@ int flashErase(void *flash, unsigned ssector, unsigned esector) {
    return 0;
 }
 
-#if 0
-int flashLock(void *flash, unsigned ssector, unsigned esector) {
-   unsigned i;
-   for (i=ssector; i<=esector; i++) {
-      if (flash_lock(blockAddress(flash, i*LFIS_BLOCKS_PER_SECTOR), 
-                     (esector - ssector + 1)*LFIS_SECTOR_SIZE - 1)) {
-         return -1;
-      }
-   }
-   
-   return 0;
-}
-#endif
-
 int flashUnlock(void *flash, unsigned ssector, unsigned esector) {
    unsigned i;
+
    for (i=ssector; i<=esector; i++) {
       if (flash_unlock(blockAddress(flash, i*LFIS_BLOCKS_PER_SECTOR), 
                        LFIS_SECTOR_SIZE - 1)) {
@@ -451,6 +438,24 @@ static unsigned extentAllocBlocks(struct lfis_extent *ext, int nbytes) {
    return (unsigned) -1;
 }
 
+static void flashUnlockExtent(void *flash, const struct lfis_extent *ext) {
+   static const struct lfis_extent *exts[LFIS_CHIPS];
+   const unsigned ssector = ext->sblock/LFIS_BLOCKS_PER_SECTOR;
+   const unsigned esector = ext->eblock/LFIS_BLOCKS_PER_SECTOR;
+
+   int i;
+
+   for (i=0; i<lengthof(exts); i++) {
+      if (ext==exts[i]) return;
+   }
+
+   flashUnlock(flash, ssector, esector);
+   for (i=0; i<lengthof(exts); i++) {
+      if (exts[i]==(void *) 0) exts[i] = flash;
+   }
+}
+
+
 /* add an entry, but don't add it to a directory
  *
  * ino is a bit tricky, if we're not fixed, we allocate
@@ -466,6 +471,8 @@ static int extentAddEntNoDir(struct lfis_extent *ext,
    struct lfis_ino nino = *ino;
    int i;
 
+   flashUnlockExtent(flash, ext);
+   
    /* allocate blocks -- if we're not fixed... */
    if ((nino.mode & LFIS_MODE_FIXED)==0) {
       if (data!=NULL) {
@@ -545,20 +552,14 @@ static int extentAddEnt(struct lfis_extent *ext,
    int i;
    struct lfis_dirent de;
    
-   if ((iino = extentAddEntNoDir(ext, flash, ino, data)) == -1) {
-      fprintf(stderr, "extent add ent: unable to add to flash\r\n");
-      return -1;
-   }
+   if ((iino = extentAddEntNoDir(ext, flash, ino, data)) < 0) return -1;
    
    /* find a spot on the root directory... */
    de.action = LFIS_ACTION_ADD;
    de.ino = iino;
    strncpy(de.name, nm, sizeof(de.name)); de.name[sizeof(de.name)-1]=0;
 
-   if ((i=extentAddDirent(ext, flash, &de))<0) {
-      fprintf(stderr, "extent add ent: unable to add to root\r\n");
-      return -1;
-   }
+   if ((i=extentAddDirent(ext, flash, &de))<0) return -1;
    
    return iino;
 }
@@ -1016,7 +1017,8 @@ int fisCreate(const char *name, void *addr, int len) {
                const unsigned ssector = ino->block / LFIS_BLOCKS_PER_SECTOR;
                const unsigned esector = 
                   ssector + (len + LFIS_SECTOR_SIZE - 1)/LFIS_SECTOR_SIZE;
-               if (flashErase(dl->flash, ssector, esector)) {
+               if (flashUnlock(dl->flash, ssector, esector) ||
+                   flashErase(dl->flash, ssector, esector)) {
                   fprintf(stderr, "fis create: unable to erase fixed\r\n");
                }
                else {
@@ -1032,7 +1034,7 @@ int fisCreate(const char *name, void *addr, int len) {
          mem->seqn++;
          for (i=0; i<lengthof(mem->exts); i++) {
             struct lfis_extent *ext = mem->exts[i].ext;
-         
+
             if (ext!=NULL) {
                struct lfis_ino ino;
                ino.block = (unsigned) -1;
