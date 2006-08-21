@@ -469,42 +469,45 @@ static int extentAddEntNoDir(struct lfis_extent *ext,
                              const struct lfis_ino *ino,
                              const void *data /* maybe NULL */) {
    struct lfis_ino nino = *ino;
-   int i;
+   int i = 0;
 
    flashUnlockExtent(flash, ext);
-   
-   /* allocate blocks -- if we're not fixed... */
-   if ((nino.mode & LFIS_MODE_FIXED)==0) {
-      if (data!=NULL) {
-         nino.block = extentAllocBlocks(ext, nino.length);
-         if (nino.block==(unsigned) -1) return -1;
-      }
-   }
-   
-   /* allocate/write inode to extent */
+
    if (data!=NULL) nino.blk_crc32 = crc32(data, nino.length);
-   nino.crc32 = crc32(&nino, sizeof(nino)-4);
    
-   for (i=0; i<lengthof(ext->inodes); i++) {
-      if (inodeAvailable(ext->inodes + i)) {
-         /* try to write it... */
-         if (flash_write(ext->inodes + i, &nino, sizeof(struct lfis_ino))==0) {
-            break;
+   while (1) {
+      /* allocate blocks -- if we're not fixed... */
+      if ((nino.mode & LFIS_MODE_FIXED)==0) {
+         if (data!=NULL) {
+            nino.block = extentAllocBlocks(ext, nino.length);
+            if (nino.block==(unsigned) -1) return -1;
          }
       }
-   }
-
-   /* unable to write inode? */
-   if (i==lengthof(ext->inodes)) return -1;
       
-   /* write data */
-   if (data!=NULL && nino.length>0 && (nino.mode & LFIS_MODE_BAD) == 0) {
-      if (flash_write(blockAddress(flash, nino.block), data, nino.length)) {
-         return -1;
+      /* allocate/write inode to extent */
+      nino.crc32 = crc32(&nino, sizeof(nino)-4);
+      while (i<lengthof(ext->inodes)) {
+         if (inodeAvailable(ext->inodes + i)) {
+            if (flash_write(ext->inodes + i, &nino, sizeof(nino))==0) {
+               /* found one! */
+               break;
+            }
+         }
+         i++;
+      }
+      
+      /* out of inodes? */
+      if (i==lengthof(ext->inodes)) return -1;
+      
+      /* write data */
+      if (data == NULL || nino.length==0 || 
+          (nino.mode & LFIS_MODE_BAD) == 0 ||
+          flash_write(blockAddress(flash, nino.block), data, nino.length)==0) {
+         break;
       }
    }
-
-   return i;
+   
+   return (i==lengthof(ext->inodes)) ? -1 : i;
 }
 
 static int direntEmpty(const struct lfis_dirent *de) {
@@ -677,10 +680,8 @@ static void extentGC(struct lfis_extent *ext, void *flash) {
          else {
             data = blockAddress(rflash, ino->block);
          }
-
-         if (extentAddEnt(ext, flash, dl->dirent->name, ino, data)<0) {
-            fprintf(stderr, "fis gc: yikes!!!\r\n");
-         }
+         
+         extentAddEnt(ext, flash, dl->dirent->name, ino, data);
       }
    }
 
@@ -691,9 +692,7 @@ static void extentGC(struct lfis_extent *ext, void *flash) {
       if ((ino->mode & LFIS_MODE_FIXED)==0) {
          void *data = blockAddress(rflash, ino->block);
 
-         if (extentAddEnt(ext, flash, dl->dirent->name, ino, data)<0) {
-            fprintf(stderr, "fis gc: yikes!!!\r\n");
-         }
+         extentAddEnt(ext, flash, dl->dirent->name, ino, data);
       }
    }
 
@@ -879,13 +878,7 @@ void *fisLookup(const char *name, unsigned long *data_length) {
                ret = blockAddress(dl->flash, ino->block);
                break;
             }
-            else {
-               /* data are bad, just remove the thing! */
-               if ((ino->mode & LFIS_MODE_FIXED)==0) {
-                  extentRemoveEnt(dl->ext, dl->flash, 
-                                  dl->dirent->ino, dl->dirent->name);
-               }
-            }
+            /* FIXME: should we remove the file?  nah, let gc do it... */
          }
       }
       
