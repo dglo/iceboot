@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.16 $
- * $Author: arthur $
- * $Date: 2006-07-21 19:36:32 $
+ * $Revision: 1.1.1.17 $
+ * $Author: jacobsen $
+ * $Date: 2006-08-21 15:45:13 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -2197,10 +2197,25 @@ static const char *doFisCreate(const char *p) {
 }
 
 static const char *doFisInit(const char *p) {
+   /* make sure... */
+   while (1) {
+      char c;
+      int nr;
+
+      printf("fis init: all data on flash will be lost: are you sure [y/n]? ");
+      fflush(stdout);
+
+      nr = read(0, &c, 1);
+
+      if (nr==1) {
+         printf("%c\r\n", c); fflush(stdout);
+         if (toupper(c)=='Y') break;
+         else if (toupper(c)=='N') { return p; }
+      }
+   }
    fisInit();
    return p;
 }
-
 
 static const char *doFisRm(const char *p) {
    char *s = (char *) mkString();
@@ -2233,14 +2248,15 @@ static const char *doFisLock(const char *p) {
  */
 static const char *find(const char *p) {
    char *s = (char *) mkString();
-   const struct fis_image_desc *img = fisLookup(s);
+   unsigned long data_length;
+   void *flash_base = fisLookup(s, &data_length);
 
-   if (img==NULL) {
+   if (flash_base==NULL) {
       push(0);
    }
    else {
-      push((int) img->flash_base);
-      push(img->data_length);
+      push((int) flash_base);
+      push((int) data_length);
       push(1);
    }
    free(s);
@@ -2250,9 +2266,10 @@ static const char *find(const char *p) {
 /* search for and source startup.fs if it exists...
  */
 static void sourceStartup(void) {
-   const struct fis_image_desc *img = fisLookup("startup.fs");
-   if (img==NULL) return;
-   interpret((int) img->flash_base, img->data_length);
+   unsigned long data_length;
+   void *flash_base = fisLookup("startup.fs", &data_length);
+   if (flash_base==NULL) return;
+   interpret((int) flash_base, (int) data_length);
 }
 
 /* stack: addr count gzip [zaddr zcnt] 
