@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.18 $
+ * $Revision: 1.1.1.19 $
  * $Author: jacobsen $
- * $Date: 2006-08-21 15:47:18 $
+ * $Date: 2007-06-08 22:21:04 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -2142,7 +2142,7 @@ static void prtCurrents(int rawCurrents) {
    /* voltages */
    const float volts[] = { 5, 3.3, 2.5, 1.8, -5 };
    /*                     5V  3.3V 2.5V 1.8V -5V */
-   const float gain[] = { 100, 10, 10, 100, 100 };
+   const float gain[] = { 100, 10, 10,  10, 100 };
    const float reff[] = { 1,   0.98, 0.80, 0.96, 1 };
    const float ueff[] = { 1,     1,    1, 1,   1 };
    const float *eff = (rawCurrents) ? ueff : reff;
