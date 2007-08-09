@@ -5,7 +5,7 @@
 #
 .SUFFIXES: .c .o .elf .bin
 
-.c.o:
+%.o : %.c *.h
 	$(CC) -c $(CFLAGS) $<
 
 all: $(SFIBIN)
