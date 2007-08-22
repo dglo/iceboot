@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.20 $
+ * $Revision: 1.1.1.21 $
  * $Author: jacobsen $
- * $Date: 2007-08-22 15:57:50 $
+ * $Date: 2007-08-22 15:58:18 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -3391,7 +3391,7 @@ int main(int argc, char *argv[]) {
      {"bd",bdumpi},
      {"dumpscaler",radio_dumpscaler},
      {"enableFBminY", enableFBminY},
-     /* Begin AURA/radio stuff */
+     /* End AURA/radio stuff */
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 
