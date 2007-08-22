@@ -85,9 +85,9 @@
  * \section notes Notes
  *   requires vt100 terminal set to 115200,N,8,1 hardware flow control...
  *
- * $Revision: 1.1.1.19 $
+ * $Revision: 1.1.1.20 $
  * $Author: jacobsen $
- * $Date: 2007-06-08 22:21:04 $
+ * $Date: 2007-08-22 15:57:50 $
  */
 #include <stdio.h>
 #include <string.h>
@@ -106,6 +106,8 @@
 #include "osdep.h"
 #include "md5.h"
 #include "versions.h"
+#include "radio_hal.h"
+#include "radio_daq_hal.h"
 
 /* location and length of the buffer
  * used for acquisition...
@@ -1909,7 +1911,7 @@ static const char *zdump(const char *p) {
 
 /* dump memory at address count
  */
-static const char *odump(const char *p) {
+const char *odump(const char *p) {
    const int cnt = pop();
    unsigned *addr = (unsigned *) pop();
    int i;
@@ -2093,7 +2095,7 @@ static const char *boardID(const char *p) {
    return p;
 }
 
-static const char *domID(const char *p) {
+const char *domID(const char *p) {
    const char *id = halGetBoardID();
    push((int) id);
    push(strlen(id));
@@ -3367,6 +3369,29 @@ int main(int argc, char *argv[]) {
      { "read-bin", readBin },
      { "release", release },
      { "fis-gc", doFisGC },
+     /* Begin AURA/radio stuff */
+     {"rr",radio_r},
+     {"rw",radio_w},
+     {"rwloop",radio_w_loop},
+     {"radio_readDAC",radio_readDAC},
+     {"radio_readScaler",radio_readScaler},
+     {"radio_fifo",radio_fifo},
+     {"ref2mb",reflection2mb},
+     {"Radio_reflection",reflection},
+     {"mb_reflection",mbreflection},
+     {"RRRF",read_reflection},
+     {"ratwd_time",radio_atwd_time},
+     {"ratwd_parse",radio_atwd_parse},
+     {"writev",write_v},
+     {"readv",read_v},
+     {"radioStat",radio_stat},
+     {"forcedtrig",forced_trig},
+     {"radiotrig",radio_trig},
+     {"TracrTime",Radio_TCal},
+     {"bd",bdumpi},
+     {"dumpscaler",radio_dumpscaler},
+     {"enableFBminY", enableFBminY},
+     /* Begin AURA/radio stuff */
   };
   const int nInitCFuncs = sizeof(initCFuncs)/sizeof(initCFuncs[0]);
 

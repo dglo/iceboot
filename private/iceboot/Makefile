@@ -13,7 +13,7 @@ clean:
 	rm -f *.o *.i *.bin *.elf *.hex *.gz nfis.c
 
 SFIOBJS = $(CRT0) $(LIBK) sfi.o memtests.o flashdrv.o osdep.o fis.o \
-	install.o md5.o
+	install.o md5.o radio_daq_hal.o
 
 sfi.o: sfi.c $(EPXAH)
 memtests.o: memtests.c $(EPXAH)
