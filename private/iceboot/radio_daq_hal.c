@@ -857,6 +857,7 @@ const char * radio_atwd_parse(const char *p) {
     int i = 0; // a counter
     int channel = 0;
     int offset = 0;
+    
     while (i<128) {
       i++;
       printf("%i\t", 128-i);
@@ -869,6 +870,18 @@ const char * radio_atwd_parse(const char *p) {
         }
       }
       printf("\n");
+    }
+
+    /* readout fADC words if available */
+    if (wf_base[1] & 0x8000) {
+      int k;
+      unsigned short *fadc = (unsigned short*) (((char*) wf_base) + 0x10);
+      printf("dumping words at %p\n", fadc);
+      for (k=0; k<256; k+=16) {
+	int l;
+	for (l=k; l<k+16; l++) printf("%4.4d ", fadc[l]);
+	printf("\n");
+      }
     }
   }
   return p;
