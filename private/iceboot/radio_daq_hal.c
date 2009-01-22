@@ -140,7 +140,7 @@ static void radioStat(void){
     //int temp=halReadTemp(); // print mb temperature
     //unsigned *cp;
     //cp = (unsigned *) addr;
-    //*cp = (unsigned ) temp;
+    // *cp = (unsigned ) temp;
   // get TRACR die temperature
   
     RADBYTE(VIRTUAL_UPPER)=0x00;
@@ -246,146 +246,122 @@ static void read_fifo(void){
   int LEN=2;
   int i;
   int N_Zero_read_count=0;
-  int dead, beef, be, counter;
+  int dead, beef, be;
   //long ta, tb;
   int Event_Fifo;
   int N1;
   N1=0;
   beef=0;
-  //int N1,N2,t1,t2,t3,t4,t5,t6;
+  int FIFO_TIMEOUT_MS = 10000;
+
+  unsigned long long startClk = hal_FPGA_TEST_get_local_clock();
+  int dt = 0;
+  int timeout = 0;
   if (number==0){
-    //while (dead==0 || beef==0) { // Added to make sure to read out until a good WF will be read.
-    i=0;   
-    dead=0;
-    beef=0; 
-    be=0;
-    N_Zero_read_count=0;
-    counter=0; // this will serve as a timer to stop waiting for a trigger.
-    // 12/06/2007 disabled the timer to stop watin.
-
-    Event_Fifo=RADBYTE(EVENT_FIFO_STATUS);
-    while (Event_Fifo==3 && counter<5000000) {
-      Event_Fifo=RADBYTE(EVENT_FIFO_STATUS); 
-      counter++; 
-      counter--;
-      /*if (counter==20) {  // Currently disabled
-        RADBYTE(addr++)=0xab;
-        RADBYTE(addr++)=0xcd;
-	push(addr);
-	DumpScaler();
-	addr=addr+pop()+1;  // Pop out the length of the data, and update the address
-	pop();//pop out the starting address. We don't need it.
-	RADBYTE(addr++)=0xab;
-	RADBYTE(addr++)=0xcd;
-	counter=0;}*/
-    }
-    // hagar:
-    halUSleep(50); //wait at least 41 usec till robust will start pushing data
-    ///    while (dead==0 && RADBYTE(EVENT_FIFO_STATUS)!=3)   /* Look for DEAD in the next 1000 words or until fifo is empty */
-    //printf("fifo=%d, %d \n ",Event_Fifo,counter);
-    while (dead==0 ) //&& N_Zero_read_count<3)   // Look for DEAD in the next 1000 words or until fifo is empty. Use event fifo read count, but allow one exra count
-      { 
-	if (RADBYTE(EVENT_FIFO_READ_COUNT)==0) 	{ N_Zero_read_count++;}
-	N1=RADBYTE(FIFO_READ);
-	//printf("dead: reading %d count=%d, %d, %d \n",N1,N_Zero_read_count,RADBYTE(EVENT_FIFO_READ_COUNT),RADBYTE(EVENT_FIFO_STATUS));
-	//printf ("%x ",N1);
-
-	if (N1==0xde) {
-	  //printf ("Found DE \n\n");
-	  //dead=1; // This should be removed. The event header DEAD is now DEA9      
-	  N1=RADBYTE(FIFO_READ);
-	  //printf ("%x ",N1);
-		if (N1==0xad || N1==0xde) {
-		  dead=1;
-		  //printf ("Found dead \n");
-		}
-	}
+      i=0;   
+      dead=0;
+      beef=0; 
+      be=0;
+      N_Zero_read_count=0;
+      
+      Event_Fifo=RADBYTE(EVENT_FIFO_STATUS);
+      while ((Event_Fifo==3) && (!timeout))  {
+          Event_Fifo=RADBYTE(EVENT_FIFO_STATUS); 
+          dt = (int)(hal_FPGA_TEST_get_local_clock()-startClk)/40000;
+          timeout = (dt > FIFO_TIMEOUT_MS);
       }
-    //printf("zero=%d \n ",N_Zero_read_count);
 
-    LEN=2;
-    i=0;
-    if (dead==1) {    
-      RADBYTE(addr)=0xde;   /* Found dead so print it to output*/
-      RADBYTE(addr+1)=0xad;
-      addr=addr+2;
+      /* If we timed out, write empty event 0xdeadbeef and return */
+      if (timeout) {
+          RADBYTE(addr++)=0xde;  
+          RADBYTE(addr++)=0xad;
+          RADBYTE(addr++)=0xbe;
+          RADBYTE(addr++)=0xef;          
+          LEN = 4;
+          push(addr0);
+          push(LEN);
+          return;
+      }
+
+      /* wait at least 41 usec till robust will start pushing data */
+      halUSleep(50); 
+      /* Look for DEAD in the next 1000 words or until fifo is empty. 
+         Use event fifo read count, but allow one exra count */
+      while (dead==0) { 
+          if (RADBYTE(EVENT_FIFO_READ_COUNT)==0) 	{ N_Zero_read_count++;}
+          N1=RADBYTE(FIFO_READ);
+
+          if (N1==0xde) {
+              N1=RADBYTE(FIFO_READ);
+              if (N1==0xad || N1==0xde) {
+                  dead=1;
+              }
+          }
+      }
+
+      LEN=2;
+      i=0;
+      if (dead==1) {    
+          RADBYTE(addr)=0xde;   /* Found dead so print it to output*/
+          RADBYTE(addr+1)=0xad;
+          addr=addr+2;
      
-	 /* now read all stuff until got beef, or until empty fifo */
-
-	//	 while (beef!=1 && RADBYTE(EVENT_FIFO_STATUS)!=3) {
-      while (beef!=1) { // && N_Zero_read_count<3) {
-	  if (RADBYTE(EVENT_FIFO_READ_COUNT)==0) 	{ N_Zero_read_count++;}
-	 	N1=RADBYTE(FIFO_READ);  /* read next word */	
-		RADBYTE(addr)=N1;
-		addr++;
-		LEN++;
-		//printf("beef: reading %d count=%d, %d, %d \n",N1,N_Zero_read_count,RADBYTE(EVENT_FIFO_READ_COUNT),RADBYTE(EVENT_FIFO_STATUS));
-		if (N1==0xbe) {be=1; /*printf("found be");*/}
-		else if (N1==0xef && be==1) {/*printf("found ef");*/ beef=1;}
-		else if (be==1 && N1!=0xef) {be=0;}
-	 }
-      //push(tb);
-      //push(1);
-    }
+          /* now read all stuff until got beef, or until empty fifo */
+          while (beef!=1) { 
+              if (RADBYTE(EVENT_FIFO_READ_COUNT)==0) 	{ N_Zero_read_count++;}
+              N1=RADBYTE(FIFO_READ);  /* read next word */	
+              RADBYTE(addr)=N1;
+              addr++;
+              LEN++;
+              if (N1==0xbe)
+                  be=1;
+              else if (N1==0xef && be==1)
+                  beef=1;
+              else if (be==1 && N1!=0xef) 
+                  be=0;
+          }
+      }
   }
-  //  }
   push(addr0);
   push(LEN);
 
-  
-  if (number==1) {   /* Read until buffer is empty or no more than 5000 events*/ 
-    i=0;
-    int addr=pop();
-    int counter=0;
-    int N1;
-    int dead=0;
-    int de=0;
-    beef=0;
-    be=0;
-    //while (dead==0 && N_Zero_read_count<3)   /* Look for DEAD in the next 1000 words or until fifo is empty. Use event fifo read count, but allow one exra count*/ 
-    //{
-    //	if (RADBYTE(EVENT_FIFO_READ_COUNT)==0) 	{ N_Zero_read_count++;}
-    
-    //	while (RADBYTE(EVENT_FIFO_STATUS)!=3 && counter<5000) {
-    while (counter<5000 && N_Zero_read_count<3) {
-      if (RADBYTE(EVENT_FIFO_READ_COUNT)==0) 	{ N_Zero_read_count++;}
-	  
-      N1=RADBYTE(FIFO_READ);
-      if (N1==0xde) {
-	//printf ("Found DE \n\n");
-	dead=1; // This should be removed. The event header DEAD is now DEA9      
-	N1=RADBYTE(FIFO_READ);
-	if (N1==0xde) {de=1;}
-	else if (N1==0xad && de==1) {counter=counter+1; de=0;}
-	else {de=0;}
-	/*	  if (N1==0xbe) {be=1;}
-		  else if (N1==0xef && be==1) {beef=1; be=0;}
-		  else {de=0;}*/
-	i=i+1;
-	RADBYTE(addr+i)=RADBYTE(FIFO_READ);
+  /* Read until buffer is empty or no more than 5000 events*/ 
+  if (number==1) {
+      i=0;
+      int addr=pop();
+      int counter=0;
+      int N1;
+      int dead=0;
+      int de=0;
+      beef=0;
+      be=0;
+      while (counter<5000 && N_Zero_read_count<3) {
+          if (RADBYTE(EVENT_FIFO_READ_COUNT)==0) 	{ N_Zero_read_count++;}	  
+          N1=RADBYTE(FIFO_READ);
+          if (N1==0xde) {
+              dead=1; 
+              N1=RADBYTE(FIFO_READ);
+              if (N1==0xde) {de=1;}
+              else if (N1==0xad && de==1) {counter=counter+1; de=0;}
+              else {de=0;}
+              i=i+1;
+              RADBYTE(addr+i)=RADBYTE(FIFO_READ);
+          }
+          push(addr);
+          push(i);
       }
-      push(addr);
-      push(i);
-    }
   }
   
-  if (number>1) {
+  if (number>1) {    
+      i=0;
+      radio_pp_counter();
+      int addr=pop();
+      for (i=0; i<number; i++) {
+          RADBYTE( addr+i)=RADBYTE(FIFO_READ);
+      }
     
-    i=0;
-    //    int N1;
-    radio_pp_counter();
-    /* N1=RADBYTE(COUNTER_ADDRESS);*/
-    /*printf ("done writing %i",SEGMENT_START_ADDRESS + SEGMENT_SIZE*N1+2);*/
-    int addr=pop();
-    for (i=0; i<number; i++) {
-      /*    RADBYTE( SEGMENT_START_ADDRESS + SEGMENT_SIZE*N1+2+i)=RADBYTE(FIFO_READ);*/
-      RADBYTE( addr+i)=RADBYTE(FIFO_READ);
-    }
-    
-    push(addr);
-    push(number);
-    /*  printf ("done writing %i",SEGMENT_START_ADDRESS + SEGMENT_SIZE*N1+2+i);*/
-    
+      push(addr);
+      push(number);    
   }
 }
 
