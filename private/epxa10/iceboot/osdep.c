@@ -236,10 +236,6 @@ int fpga_config(int *p, int nbytes) {
   /* restore interrupts... */
   *(volatile unsigned *) (REGISTERS + 0xc04) = interrupts;
 
-  /* JJ: Thorsten has asked for 100usec delay here to let FPGA finish its 
-     business */
-  halUSleep(100);
-
 #if 0
   /* load thresholds for comm -- these are defaults except sdelay
    * and rdelay...
