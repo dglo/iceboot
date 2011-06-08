@@ -321,18 +321,99 @@ int flashInstall(void) {
    return 0;
 }
 
+/* burn an entire flash image from memory... 
+ *
+ * return number of write errors...
+ */
+int flashBurnImage(int imgint, int wlen) {
+   const unsigned short *img = (const unsigned short *) imgint;
+   void *fs, *fe;
+   int nretries=0;
+   int i;
+   int idx = 0;
+   unsigned chip_start[2], chip_end[2];
+   int nerrors = 0;
 
+   while (1) { 
+      char c;
+      int nr;
+      
+      printf("install: all flash data will be erased: are you sure [y/n]? ");
+      fflush(stdout);
 
+      nr = read(0, &c, 1);
 
+      if (nr==1) {
+	 printf("%c\r\n", c); fflush(stdout);
+	 if (toupper(c)=='Y') break;
+	 else if (toupper(c)=='N') return 1;
+      }
+      if (nretries==10) return 1;
+   }
+   
+   /* erase flash...
+    */
+   flash_get_limits(NULL, &fs, &fe);
 
+   chip_start[0] = (unsigned) fs;
+   chip_start[1] = (unsigned) flash_chip_addr(1);
+   chip_end[0] = chip_start[1]-1;
+   chip_end[1] = (unsigned) fe;
 
+   for (i=0; i<2; i++) {
+      /* unlock all data
+       */
+      printf("chip %d: unlock... ", i); fflush(stdout);
+      if (flash_unlock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to unlock %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      
+      /* erase all data -- except for iceboot...
+       */
+      printf("erase... "); fflush(stdout);
+      if (flash_erase((void *) chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to erase %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      
+      printf("\r\n");
+   }
 
+   printf("Programming...\r\n"); fflush(stdout);
+   while (idx<wlen) {
+      /* no need to program 0xffff's ... */
+      while (idx<wlen && img[idx]==0xffff) idx++;
 
+      if (idx<wlen) {
+         const int c1idx = (chip_start[1] - chip_start[0])/2;
+         int eidx = idx + 1;
 
+         while (eidx<wlen && 
+                ((idx<c1idx && eidx<c1idx) || idx>=c1idx) &&
+                img[eidx]!=0xffff) {
+            eidx++;
+         }
 
+         /* write the block(s)... */
+         if (flash_write(fs + idx*2, img + idx, (eidx - idx)*2)) {
+            nerrors++;
+         }
 
+         idx=eidx;
+      }
+   }
+   
+   for (i=0; i<2; i++) {
+      printf("chip %d: lock... ", i); fflush(stdout);
+      if (flash_lock((void *)chip_start[i], chip_end[i] - chip_start[i])) {
+	 printf("unable to lock %08x -> %08x\r\n", 
+		chip_start[i], chip_end[i]);
+      }
+      printf("\r\n");
+   }
 
+   if (nerrors) printf("%d write ERRORS detected!!!\r\n", nerrors);
 
-
-
-
+   return nerrors;
+}

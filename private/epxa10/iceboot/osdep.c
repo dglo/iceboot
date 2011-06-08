@@ -144,7 +144,8 @@ int fpga_config(int *p, int nbytes) {
   int *cdata = (int *) (REGISTERS + 0x148);
   int i;
   const int rbtreq = halIsFPGALoaded() && hal_FPGA_is_comm_avail();
-
+  unsigned interrupts = 0;
+  
   /* request reboot from DOR */
   if (rbtreq) hal_FPGA_request_reboot();
 
@@ -192,6 +193,13 @@ int fpga_config(int *p, int nbytes) {
     return 2;
   }
 
+  /* save interrupts... */
+  interrupts = *(volatile unsigned *) (REGISTERS + 0xc00);
+
+  /* no interrupt sources during reload... */
+  *(volatile unsigned *) (REGISTERS + 0xc04) = 0;
+
+
   /* set CO */
   *(volatile int *) ccntl = 2;
 
@@ -206,6 +214,9 @@ int fpga_config(int *p, int nbytes) {
        */
       if ( (*(volatile int *) ccntl)&0x10) {
 	printf("config programming error!\n");
+
+        /* restore interrupts... */
+        *(volatile unsigned *) (REGISTERS + 0xc04) = interrupts;
 	return 10;
       }
     }
@@ -215,10 +226,15 @@ int fpga_config(int *p, int nbytes) {
    */
   while ((*(volatile int *) ccntl)&0x2) {
     if ( (*(volatile int *) ccntl)&0x10) {
+      /* restore interrupts... */
+      *(volatile unsigned *) (REGISTERS + 0xc04) = interrupts;
       printf("config programming error (waiting for CO)!\n");
       return 10;
     }
   }
+
+  /* restore interrupts... */
+  *(volatile unsigned *) (REGISTERS + 0xc04) = interrupts;
 
 #if 0
   /* load thresholds for comm -- these are defaults except sdelay
