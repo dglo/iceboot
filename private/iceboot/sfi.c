@@ -27,6 +27,7 @@
  *   \arg \b \ -- the rest of the line is a comment
  *   \arg \b drop -- drop the top value of the stack
  *   \arg \b dup -- duplicate the top value of the stack
+ *   \arg \b over -- duplicate the next-to-top value at the top of the stack
  *   \arg \b ymodem1k -- push address and size of a buffer retrieved from
  * the ymodem protocol
  *   \arg \e nbytes \b allocate -- allocate nbytes on the heap
@@ -1878,6 +1879,13 @@ static const char *sdup(const char *p) {
   return p;
 }
 
+static const char *over(const char *p) {
+  int u = pop();
+  int v = pop();
+  push(v); push(u); push(v);
+  return p;
+}
+
 /*
  * do a fast, compressed binary dump like od.
  * note the non-standard convention of
@@ -2422,6 +2430,12 @@ static const char *gunzip(const char *p) {
 	 ((int) src[srcLen-1]<<24);
       
       dest = (Bytef *) malloc(dl);
+      if (dest==NULL) {
+          printf("gunzip: error allocating destination memory (%d B)\r\n", dl);
+          push(0);
+          push(0);
+          return p;
+      }
       destLen = dl;
       ret = uncomp(dest, &destLen, src + idx, srcLen - idx - 8);
 
@@ -2570,6 +2584,12 @@ static int isInputData(void) { return halIsInputData(); }
 static const char *readBin(const char *p) {
    int nbytes=pop();
    unsigned char *b = (unsigned char *) memalloc(nbytes);
+   if (b==NULL) {
+       printf("readBin: couldn't allocate read buffer\r\n");
+       push(0);
+       push(0);
+       return p;
+   }
    int nr = 0;
    while (nr<nbytes) {
       const int nleft = nbytes - nr;
@@ -3286,6 +3306,7 @@ int main(int argc, char *argv[]) {
      { "\\", comment },
      { "drop", drop },
      { "dup", sdup },
+     { "over", over },
      { "ymodem1k", ymodem1k },
      { "ry", ry },
      { "sy", sy },
